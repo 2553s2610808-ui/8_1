@@ -1,541 +1,1061 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
 """
-지하철 길안내 시스템
-====================
-출발역과 도착역을 입력하면
-  1) 최단 시간 경로 (환승 포함)를 계산하고
-  2) 단계별 안내를 화면에 출력하며
-  3) 지도(HTML, Leaflet)를 브라우저로 열어 경로를 보여주고
-  4) 음성(TTS)으로 안내합니다.
+🚇 수도권 지하철 길찾기 - 전체 노선 버전
 
-사용법
-------
-  python "지하철 길안내 시스템.py"                 # 실행 후 직접 입력
-  python "지하철 길안내 시스템.py" 홍대입구 강남     # 바로 안내
-  python "지하철 길안내 시스템.py" 홍대입구 강남 --no-voice --no-map
+기능
+- 수도권 전철 전체 데이터 자동 다운로드/캐시
+- 출발역 → 도착역 최단시간 경로
+- 환승역/일반역 모두 표시
+- 사진처럼 카드형 파란·보라 UI
+- 노선 색상 표시
+- 경로 지도(Leaflet)
+- 음성 안내 선택 기능
 
-음성 사용을 위한 선택 설치 (둘 중 하나, 없으면 음성만 건너뜀)
-  pip install gTTS        # 인터넷 필요, 한국어 품질 좋음
-  pip install pyttsx3     # 오프라인 (OS에 한국어 음성이 설치되어 있어야 함)
-  (macOS는 기본 내장 `say` 명령으로도 동작)
+데이터
+- station_nodes.csv : 역·노선·좌표
+- station_edges.csv : 역과 역 사이 연결/소요시간
+데이터 출처 및 범위는 실행 화면의 출처 안내를 참고하세요.
 
-※ 지도 화면은 브라우저가 인터넷에서 지도 타일을 불러옵니다.
-※ 내장 데이터는 서울 주요 구간 일부(1~5호선)이며 좌표/소요시간은 근사값입니다.
-   실제 운행·막차 시간은 공식 앱을 확인하세요.
+필요 패키지
+    pip install flask
+
+실행
+    python subway_all.py
+
+브라우저가 자동으로 열리고,
+    출발역 / 도착역
+을 입력하면 됩니다.
 """
 
-import argparse
-import difflib
+import csv
 import heapq
 import json
 import math
 import os
-import platform
-import shutil
-import subprocess
-import sys
-import tempfile
+import threading
+import time
+import urllib.request
 import webbrowser
+from collections import defaultdict
 
-# ─────────────────────────────────────────────────────────────
-# 1. 노선 데이터 (역명, 위도, 경도)
-# ─────────────────────────────────────────────────────────────
-LINES = {
-    "1호선": {
-        "color": "#0052A4",
-        "loop": False,
-        "fwd": "구로·인천 방면",
-        "bwd": "청량리·소요산 방면",
-        "stations": [
-            ("청량리", 37.5800, 127.0469), ("제기동", 37.5782, 127.0348),
-            ("신설동", 37.5757, 127.0247), ("동묘앞", 37.5727, 127.0166),
-            ("동대문", 37.5711, 127.0117), ("종로5가", 37.5710, 127.0019),
-            ("종로3가", 37.5704, 126.9921), ("종각", 37.5702, 126.9831),
-            ("시청", 37.5657, 126.9769), ("서울역", 37.5547, 126.9707),
-            ("남영", 37.5410, 126.9713), ("용산", 37.5299, 126.9647),
-            ("노량진", 37.5135, 126.9424), ("대방", 37.5133, 126.9264),
-            ("신길", 37.5170, 126.9174), ("영등포", 37.5159, 126.9073),
-            ("신도림", 37.5088, 126.8913), ("구로", 37.5030, 126.8819),
-        ],
-    },
-    "2호선": {
-        "color": "#00A84D",
-        "loop": True,
-        "fwd": "외선순환",
-        "bwd": "내선순환",
-        "stations": [
-            ("시청", 37.5657, 126.9769), ("을지로입구", 37.5660, 126.9822),
-            ("을지로3가", 37.5663, 126.9917), ("을지로4가", 37.5667, 126.9978),
-            ("동대문역사문화공원", 37.5651, 127.0079), ("신당", 37.5658, 127.0196),
-            ("상왕십리", 37.5644, 127.0293), ("왕십리", 37.5612, 127.0371),
-            ("한양대", 37.5555, 127.0437), ("뚝섬", 37.5474, 127.0473),
-            ("성수", 37.5446, 127.0560), ("건대입구", 37.5404, 127.0693),
-            ("구의", 37.5370, 127.0858), ("강변", 37.5351, 127.0945),
-            ("잠실나루", 37.5207, 127.1037), ("잠실", 37.5133, 127.1001),
-            ("잠실새내", 37.5115, 127.0860), ("종합운동장", 37.5109, 127.0736),
-            ("삼성", 37.5088, 127.0631), ("선릉", 37.5045, 127.0490),
-            ("역삼", 37.5006, 127.0364), ("강남", 37.4979, 127.0276),
-            ("교대", 37.4934, 127.0140), ("서초", 37.4916, 127.0078),
-            ("방배", 37.4814, 126.9976), ("사당", 37.4766, 126.9816),
-            ("낙성대", 37.4769, 126.9637), ("서울대입구", 37.4813, 126.9527),
-            ("봉천", 37.4824, 126.9417), ("신림", 37.4842, 126.9296),
-            ("신대방", 37.4875, 126.9131), ("구로디지털단지", 37.4852, 126.9015),
-            ("대림", 37.4930, 126.8952), ("신도림", 37.5088, 126.8913),
-            ("문래", 37.5173, 126.8946), ("영등포구청", 37.5249, 126.8964),
-            ("당산", 37.5348, 126.9025), ("합정", 37.5495, 126.9139),
-            ("홍대입구", 37.5571, 126.9245), ("신촌", 37.5551, 126.9367),
-            ("이대", 37.5568, 126.9464), ("아현", 37.5576, 126.9561),
-            ("충정로", 37.5599, 126.9637),
-        ],
-    },
-    "3호선": {
-        "color": "#EF7C1C",
-        "loop": False,
-        "fwd": "수서·오금 방면",
-        "bwd": "대화 방면",
-        "stations": [
-            ("연신내", 37.6190, 126.9211), ("불광", 37.6103, 126.9300),
-            ("녹번", 37.6004, 126.9358), ("홍제", 37.5890, 126.9437),
-            ("무악재", 37.5826, 126.9500), ("독립문", 37.5745, 126.9577),
-            ("경복궁", 37.5759, 126.9735), ("안국", 37.5765, 126.9854),
-            ("종로3가", 37.5704, 126.9921), ("을지로3가", 37.5663, 126.9917),
-            ("충무로", 37.5612, 126.9942), ("동대입구", 37.5589, 127.0050),
-            ("약수", 37.5543, 127.0108), ("금호", 37.5481, 127.0158),
-            ("옥수", 37.5404, 127.0178), ("압구정", 37.5271, 127.0285),
-            ("신사", 37.5164, 127.0203), ("잠원", 37.5113, 127.0113),
-            ("고속터미널", 37.5049, 127.0049), ("교대", 37.4934, 127.0140),
-            ("남부터미널", 37.4850, 127.0162), ("양재", 37.4845, 127.0344),
-            ("매봉", 37.4871, 127.0468), ("도곡", 37.4909, 127.0553),
-            ("대치", 37.4946, 127.0638), ("학여울", 37.4967, 127.0709),
-            ("대청", 37.4934, 127.0794), ("일원", 37.4837, 127.0863),
-            ("수서", 37.4876, 127.1018),
-        ],
-    },
-    "4호선": {
-        "color": "#00A5DE",
-        "loop": False,
-        "fwd": "사당·오이도 방면",
-        "bwd": "당고개 방면",
-        "stations": [
-            ("길음", 37.6033, 127.0250), ("성신여대입구", 37.5927, 127.0165),
-            ("한성대입구", 37.5883, 127.0063), ("혜화", 37.5822, 127.0018),
-            ("동대문", 37.5711, 127.0117),
-            ("동대문역사문화공원", 37.5651, 127.0079),
-            ("충무로", 37.5612, 126.9942), ("명동", 37.5609, 126.9863),
-            ("회현", 37.5588, 126.9780), ("서울역", 37.5547, 126.9707),
-            ("숙대입구", 37.5446, 126.9721), ("삼각지", 37.5347, 126.9731),
-            ("신용산", 37.5292, 126.9677), ("이촌", 37.5223, 126.9739),
-            ("동작", 37.5027, 126.9802), ("총신대입구", 37.4865, 126.9817),
-            ("사당", 37.4766, 126.9816),
-        ],
-    },
-    "5호선": {
-        "color": "#996CAC",
-        "loop": False,
-        "fwd": "하남검단산 방면",
-        "bwd": "방화 방면",
-        "stations": [
-            ("영등포구청", 37.5249, 126.8964), ("영등포시장", 37.5226, 126.9055),
-            ("신길", 37.5170, 126.9174), ("여의도", 37.5216, 126.9243),
-            ("여의나루", 37.5271, 126.9328), ("마포", 37.5396, 126.9460),
-            ("공덕", 37.5440, 126.9516), ("애오개", 37.5535, 126.9566),
-            ("충정로", 37.5599, 126.9637), ("서대문", 37.5658, 126.9667),
-            ("광화문", 37.5710, 126.9768), ("종로3가", 37.5704, 126.9921),
-            ("을지로4가", 37.5667, 126.9978),
-            ("동대문역사문화공원", 37.5651, 127.0079),
-            ("청구", 37.5603, 127.0139), ("신금호", 37.5545, 127.0207),
-            ("행당", 37.5574, 127.0292), ("왕십리", 37.5612, 127.0371),
-            ("마장", 37.5661, 127.0430), ("답십리", 37.5669, 127.0526),
-            ("장한평", 37.5614, 127.0645), ("군자", 37.5571, 127.0795),
-            ("아차산", 37.5516, 127.0896), ("광나루", 37.5455, 127.1031),
-            ("천호", 37.5385, 127.1236), ("강동", 37.5359, 127.1325),
-        ],
-    },
+from flask import Flask, jsonify, render_template_string, request
+
+
+# ============================================================
+# 1. 전체 수도권 전철 데이터
+# ============================================================
+
+BASE_URL = "https://raw.githubusercontent.com/minseok852/subway-etl/main/output/"
+NODE_URL = BASE_URL + "station_nodes.csv"
+EDGE_URL = BASE_URL + "station_edges.csv"
+
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "subway_data")
+NODE_FILE = os.path.join(DATA_DIR, "station_nodes.csv")
+EDGE_FILE = os.path.join(DATA_DIR, "station_edges.csv")
+
+os.makedirs(DATA_DIR, exist_ok=True)
+
+
+def download_if_needed(url, path):
+    if os.path.exists(path) and os.path.getsize(path) > 100:
+        return
+
+    print(f"데이터 다운로드 중: {os.path.basename(path)}")
+    try:
+        urllib.request.urlretrieve(url, path)
+    except Exception as e:
+        raise RuntimeError(
+            f"데이터 다운로드에 실패했습니다.\n"
+            f"인터넷 연결을 확인한 뒤 다시 실행하세요.\n\n{e}"
+        )
+
+
+download_if_needed(NODE_URL, NODE_FILE)
+download_if_needed(EDGE_URL, EDGE_FILE)
+
+
+# ============================================================
+# 2. 노선 색상
+# ============================================================
+
+LINE_COLORS = {
+    "1": "#0052A4",
+    "2": "#00A84D",
+    "3": "#EF7C1C",
+    "4": "#00A5DE",
+    "5": "#996CAC",
+    "6": "#CD7C2F",
+    "7": "#747F00",
+    "8": "#E6186C",
+    "9": "#BDB092",
+
+    "B": "#F5A200",      # 수인분당
+    "S": "#D31145",      # 신분당
+    "K": "#77C4A3",      # 경의중앙
+    "A": "#0090D2",      # 공항철도
+    "G": "#178C72",      # 경춘
+    "U": "#B7C450",      # 의정부
+    "E": "#FFCD00",      # 에버라인
+    "KK": "#003DA5",     # 경강
+    "W": "#B7B7B7",      # 우이신설
+    "SH": "#F06A00",     # 서해선
+    "KP": "#8B50A4",     # 김포골드
+    "I": "#759C2A",      # 인천1
+    "I2": "#F5A100",     # 인천2
+    "GTXA": "#3B82F6",
+    "M": "#777777",
 }
 
-AVG_SPEED_KMH = 40.0     # 평균 운행 속도 (정차 제외)
-DWELL_MIN = 0.6          # 역당 정차/가감속 시간(분)
-TRANSFER_MIN = 4.0       # 환승 소요 시간(분)
 
-# ─────────────────────────────────────────────────────────────
-# 2. 그래프 구성
-# ─────────────────────────────────────────────────────────────
-COORDS = {}              # 역명 -> (lat, lon)
-LINE_INDEX = {}          # 호선 -> {역명: 순번}
-for _ln, _info in LINES.items():
-    LINE_INDEX[_ln] = {}
-    for _i, (_name, _lat, _lon) in enumerate(_info["stations"]):
-        COORDS.setdefault(_name, (_lat, _lon))
-        LINE_INDEX[_ln][_name] = _i
-
-
-def haversine_km(a, b):
-    r = 6371.0
-    p1, p2 = math.radians(a[0]), math.radians(b[0])
-    dphi = p2 - p1
-    dl = math.radians(b[1] - a[1])
-    h = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return 2 * r * math.asin(math.sqrt(h))
-
-
-def build_graph():
-    """노드 = (역명, 호선). 같은 호선 인접역 + 같은 역의 호선 간 환승."""
-    graph = {}
-
-    def add(u, v, w):
-        graph.setdefault(u, []).append((v, w))
-        graph.setdefault(v, []).append((u, w))
-
-    by_station = {}
-    for ln, info in LINES.items():
-        names = [s[0] for s in info["stations"]]
-        pairs = list(zip(names, names[1:]))
-        if info["loop"]:
-            pairs.append((names[-1], names[0]))
-        for a, b in pairs:
-            minutes = haversine_km(COORDS[a], COORDS[b]) / AVG_SPEED_KMH * 60 + DWELL_MIN
-            add((a, ln), (b, ln), minutes)
-        for n in names:
-            by_station.setdefault(n, []).append(ln)
-
-    for name, lns in by_station.items():
-        for i in range(len(lns)):
-            for j in range(i + 1, len(lns)):
-                add((name, lns[i]), (name, lns[j]), TRANSFER_MIN)
-    return graph, by_station
+LINE_NAMES = {
+    "1": "1호선",
+    "2": "2호선",
+    "3": "3호선",
+    "4": "4호선",
+    "5": "5호선",
+    "6": "6호선",
+    "7": "7호선",
+    "8": "8호선",
+    "9": "9호선",
+    "B": "수인분당선",
+    "S": "신분당선",
+    "K": "경의·중앙선",
+    "A": "공항철도",
+    "G": "경춘선",
+    "U": "의정부경전철",
+    "E": "용인에버라인",
+    "KK": "경강선",
+    "W": "우이신설선",
+    "SH": "서해선",
+    "KP": "김포골드라인",
+    "I": "인천1호선",
+    "I2": "인천2호선",
+    "GTXA": "GTX-A",
+}
 
 
-GRAPH, BY_STATION = build_graph()
+def line_name(line_key):
+    return LINE_NAMES.get(str(line_key), str(line_key))
 
 
-def shortest_path(origin, dest):
-    starts = [(origin, ln) for ln in BY_STATION[origin]]
-    goals = {(dest, ln) for ln in BY_STATION[dest]}
-    dist = {s: 0.0 for s in starts}
+def line_color(line_key):
+    return LINE_COLORS.get(str(line_key), "#64748B")
+
+
+# ============================================================
+# 3. 데이터 읽기
+# ============================================================
+
+NODES = {}                  # node_id -> 정보
+STATIONS = defaultdict(list) # 역명 -> node_id 목록
+GRAPH = defaultdict(list)   # node_id -> (node_id, seconds, edge_type)
+
+with open(NODE_FILE, "r", encoding="utf-8-sig", newline="") as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        node_id = int(row["id"])
+        station = row["station_name"].strip()
+        line_key = row["line_key"].strip()
+
+        info = {
+            "id": node_id,
+            "station": station,
+            "line_key": line_key,
+            "line": line_name(line_key),
+            "lat": float(row["lat"]),
+            "lon": float(row["lon"]),
+        }
+
+        NODES[node_id] = info
+        STATIONS[station].append(node_id)
+
+
+with open(EDGE_FILE, "r", encoding="utf-8-sig", newline="") as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        a = int(row["from_node_id"])
+        b = int(row["to_node_id"])
+        seconds = float(row["seconds"])
+        edge_type = row.get("edge_type", "ride")
+
+        GRAPH[a].append((b, seconds, edge_type))
+        GRAPH[b].append((a, seconds, edge_type))
+
+
+# ============================================================
+# 4. 역 검색
+# ============================================================
+
+def normalize(text):
+    text = (text or "").strip().replace(" ", "")
+    if text.endswith("역") and len(text) > 1:
+        text = text[:-1]
+    return text
+
+
+def find_station(query):
+    q = normalize(query)
+
+    # 정확한 이름
+    for name in STATIONS:
+        if normalize(name) == q:
+            return name
+
+    # 포함 검색
+    matches = [name for name in STATIONS if q and q in normalize(name)]
+
+    if len(matches) == 1:
+        return matches[0]
+
+    if matches:
+        return matches[:10]
+
+    return []
+
+
+# ============================================================
+# 5. 최단시간 경로
+# ============================================================
+
+def shortest_path(origin_name, dest_name):
+    start_nodes = STATIONS.get(origin_name, [])
+    goal_nodes = set(STATIONS.get(dest_name, []))
+
+    if not start_nodes or not goal_nodes:
+        return None
+
+    dist = {}
     prev = {}
-    heap = [(0.0, s) for s in starts]
-    heapq.heapify(heap)
+
+    heap = []
+
+    for s in start_nodes:
+        dist[s] = 0
+        heapq.heappush(heap, (0, s))
+
     while heap:
-        d, u = heapq.heappop(heap)
-        if d > dist.get(u, math.inf):
+        cost, u = heapq.heappop(heap)
+
+        if cost != dist.get(u):
             continue
-        if u in goals:
+
+        if u in goal_nodes:
             path = [u]
             while path[-1] in prev:
                 path.append(prev[path[-1]])
-            return list(reversed(path)), d
-        for v, w in GRAPH[u]:
-            nd = d + w
-            if nd < dist.get(v, math.inf):
-                dist[v] = nd
+            path.reverse()
+            return path, cost
+
+        for v, weight, edge_type in GRAPH.get(u, []):
+            new_cost = cost + weight
+
+            if new_cost < dist.get(v, float("inf")):
+                dist[v] = new_cost
                 prev[v] = u
-                heapq.heappush(heap, (nd, v))
-    return None, math.inf
+                heapq.heappush(heap, (new_cost, v))
+
+    return None
 
 
-# ─────────────────────────────────────────────────────────────
-# 3. 경로 → 안내 단계
-# ─────────────────────────────────────────────────────────────
-def split_segments(path):
-    """경로를 호선별 탑승 구간으로 분리. 환승 노드(같은 역, 다른 호선)는 구간 경계."""
-    segments = []
-    cur = [path[0]]
-    for node in path[1:]:
-        if node[1] == cur[-1][1]:
-            cur.append(node)
-        else:
-            segments.append(cur)
-            cur = [node]
-    segments.append(cur)
-    return [s for s in segments if len(s) >= 2] or segments
+# ============================================================
+# 6. 경로 정리
+# ============================================================
+
+def make_route(path, total_seconds):
+    stations = [NODES[n] for n in path]
+
+    transfers = []
+    ride_segments = []
+
+    current = []
+    current_line = None
+
+    for i, node in enumerate(stations):
+        if i == 0:
+            current = [node]
+            current_line = node["line_key"]
+            continue
+
+        prev = stations[i - 1]
+
+        # 같은 노선
+        if node["line_key"] == current_line:
+            current.append(node)
+            continue
+
+        # 환승
+        ride_segments.append({
+            "line_key": current_line,
+            "line": line_name(current_line),
+            "color": line_color(current_line),
+            "stations": current[:],
+        })
+
+        transfers.append({
+            "station": prev["station"],
+            "lat": prev["lat"],
+            "lon": prev["lon"],
+            "from_line": line_name(current_line),
+            "to_line": line_name(node["line_key"]),
+        })
+
+        current = [node]
+        current_line = node["line_key"]
+
+    if current:
+        ride_segments.append({
+            "line_key": current_line,
+            "line": line_name(current_line),
+            "color": line_color(current_line),
+            "stations": current[:],
+        })
+
+    # 실제 경로에 환승 edge가 들어간 경우를 별도로 표시
+    clean_segments = []
+
+    for seg in ride_segments:
+        if len(seg["stations"]) >= 1:
+            clean_segments.append(seg)
+
+    return {
+        "origin": stations[0],
+        "destination": stations[-1],
+        "stations": stations,
+        "segments": clean_segments,
+        "transfers": transfers,
+        "transfer_count": len(transfers),
+        "total_seconds": total_seconds,
+        "total_minutes": max(1, round(total_seconds / 60)),
+    }
 
 
-def direction_label(line, stations):
-    info = LINES[line]
-    idx = LINE_INDEX[line]
-    a, b = idx[stations[0]], idx[stations[1]]
-    if info["loop"]:
-        n = len(info["stations"])
-        forward = (b - a) % n == 1
-    else:
-        forward = b > a
-    return info["fwd"] if forward else info["bwd"]
+# ============================================================
+# 7. Flask
+# ============================================================
+
+app = Flask(__name__)
 
 
-def segment_minutes(seg):
-    total = 0.0
-    for a, b in zip(seg, seg[1:]):
-        total += haversine_km(COORDS[a[0]], COORDS[b[0]]) / AVG_SPEED_KMH * 60 + DWELL_MIN
-    return total
+HTML = r"""
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
+<title>LIVE SUBWAY</title>
 
-def build_guidance(origin, dest, path, total_min):
-    segments = split_segments(path)
-    steps = []
-    transfers = len(segments) - 1
+<link rel="stylesheet"
+ href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 
-    steps.append(f"{origin}역에서 출발합니다.")
-    for i, seg in enumerate(segments):
-        line = seg[0][1]
-        names = [n for n, _ in seg]
-        n_stops = len(names) - 1
-        label = direction_label(line, names)
-        mins = max(1, round(segment_minutes(seg)))
-        steps.append(
-            f"{line} {label} 열차를 타세요. "
-            f"{n_stops}개 역을 이동해 {names[-1]}역에서 내립니다. 약 {mins}분 걸립니다."
-        )
-        if i < len(segments) - 1:
-            nxt = segments[i + 1][0][1]
-            steps.append(f"{names[-1]}역에서 {nxt}으로 환승하세요.")
-    steps.append(
-        f"{dest}역에 도착했습니다. 총 {round(total_min)}분 정도 걸리며, "
-        f"환승은 {transfers}회입니다."
-    )
-    return steps, segments, transfers
-
-
-# ─────────────────────────────────────────────────────────────
-# 4. 지도 (Leaflet HTML)
-# ─────────────────────────────────────────────────────────────
-MAP_TEMPLATE = """<!DOCTYPE html>
-<html lang="ko"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>지하철 길안내: __TITLE__</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
-  html,body{height:100%;margin:0;font-family:-apple-system,"Malgun Gothic",sans-serif}
-  #wrap{display:flex;height:100%}
-  #side{width:340px;max-width:40%;overflow:auto;padding:16px;box-sizing:border-box;
-        background:#fafafa;border-right:1px solid #ddd}
-  #map{flex:1}
-  h1{font-size:18px;margin:0 0 4px}
-  .sub{color:#666;font-size:13px;margin-bottom:14px}
-  .step{display:flex;gap:10px;margin:0 0 12px;font-size:14px;line-height:1.45}
-  .dot{flex:none;width:12px;height:12px;border-radius:50%;margin-top:4px}
-  @media(max-width:700px){#wrap{flex-direction:column-reverse}
-    #side{width:auto;max-width:none;height:45%;border-right:0;border-top:1px solid #ddd}}
-</style></head>
-<body><div id="wrap">
-<div id="side"></div><div id="map"></div></div>
-<script>
-const DATA = __DATA__;
-const map = L.map('map');
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-  {maxZoom:19, attribution:'&copy; OpenStreetMap'}).addTo(map);
 
-const all = [];
-DATA.segments.forEach(seg=>{
-  const pts = seg.stations.map(s=>[s.lat,s.lon]);
-  all.push(...pts);
-  L.polyline(pts,{color:seg.color,weight:7,opacity:.9}).addTo(map);
-  seg.stations.forEach(s=>{
-    L.circleMarker([s.lat,s.lon],{radius:5,color:seg.color,weight:3,
-      fillColor:'#fff',fillOpacity:1}).bindTooltip(s.name+'역').addTo(map);
-  });
-});
-function pin(p,color,label){
-  L.circleMarker([p.lat,p.lon],{radius:11,color:'#fff',weight:3,fillColor:color,fillOpacity:1})
-   .addTo(map).bindTooltip(label+': '+p.name+'역',{permanent:true,direction:'top',offset:[0,-10]});
+* {
+    box-sizing: border-box;
 }
-pin(DATA.origin,'#d32f2f','출발'); pin(DATA.dest,'#1565c0','도착');
-DATA.transfers.forEach(t=>{
-  L.marker([t.lat,t.lon]).addTo(map).bindTooltip(t.name+'역 환승');
-});
-map.fitBounds(all,{padding:[40,40]});
 
-const side = document.getElementById('side');
-side.innerHTML = '<h1>'+DATA.origin.name+' → '+DATA.dest.name+'</h1>'+
-  '<div class="sub">약 '+DATA.total+'분 · 환승 '+DATA.transfer_count+'회</div>'+
-  DATA.steps.map((t,i)=>'<div class="step"><span class="dot" style="background:'+
-    DATA.dots[i]+'"></span><span>'+t+'</span></div>').join('');
-</script></body></html>
+body {
+    margin: 0;
+    font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Noto Sans KR",
+        "Malgun Gothic",
+        sans-serif;
+    background: #5269bd;
+    color: #20243a;
+}
+
+.app {
+    min-height: 100vh;
+    padding: 38px;
+}
+
+.top {
+    max-width: 1200px;
+    margin: auto;
+    color: white;
+    margin-bottom: 22px;
+}
+
+.logo {
+    font-size: 29px;
+    font-weight: 900;
+    letter-spacing: -1.5px;
+}
+
+.logo span {
+    opacity: .65;
+}
+
+.subtitle {
+    margin-top: 7px;
+    opacity: .78;
+    font-size: 13px;
+}
+
+.grid {
+    max-width: 1200px;
+    margin: auto;
+    display: grid;
+    grid-template-columns: 390px 1fr;
+    gap: 18px;
+}
+
+.card {
+    background: rgba(255,255,255,.96);
+    border-radius: 26px;
+    box-shadow: 0 16px 45px rgba(20,30,80,.18);
+}
+
+.search {
+    padding: 25px;
+}
+
+.label {
+    font-size: 12px;
+    font-weight: 800;
+    color: #777d99;
+    margin-bottom: 7px;
+}
+
+.input {
+    width: 100%;
+    border: 0;
+    outline: none;
+    padding: 16px 17px;
+    border-radius: 15px;
+    background: #f1f3fa;
+    font-size: 16px;
+    margin-bottom: 13px;
+}
+
+.swap {
+    width: 42px;
+    height: 42px;
+    border: 0;
+    border-radius: 50%;
+    background: #e9ecff;
+    color: #5269bd;
+    font-size: 20px;
+    cursor: pointer;
+    display: block;
+    margin: -3px auto 12px;
+}
+
+.button {
+    width: 100%;
+    border: 0;
+    padding: 16px;
+    border-radius: 15px;
+    background: #5269bd;
+    color: white;
+    font-size: 16px;
+    font-weight: 800;
+    cursor: pointer;
+    box-shadow: 0 8px 20px rgba(82,105,189,.3);
+}
+
+.route-card {
+    padding: 22px;
+    margin-top: 16px;
+}
+
+.route-title {
+    font-size: 18px;
+    font-weight: 900;
+}
+
+.route-info {
+    color: #747a92;
+    font-size: 12px;
+    margin-top: 5px;
+}
+
+.route-list {
+    margin-top: 18px;
+}
+
+.step {
+    display: flex;
+    gap: 12px;
+    padding: 11px 0;
+    border-bottom: 1px solid #eef0f5;
+}
+
+.step:last-child {
+    border-bottom: 0;
+}
+
+.circle {
+    flex: 0 0 13px;
+    width: 13px;
+    height: 13px;
+    margin-top: 4px;
+    border-radius: 50%;
+}
+
+.step-text {
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.map-card {
+    overflow: hidden;
+    min-height: 650px;
+    position: relative;
+}
+
+#map {
+    width: 100%;
+    height: 650px;
+}
+
+.map-badge {
+    position: absolute;
+    z-index: 999;
+    top: 17px;
+    left: 17px;
+    padding: 10px 14px;
+    background: rgba(255,255,255,.93);
+    border-radius: 13px;
+    box-shadow: 0 5px 20px rgba(0,0,0,.12);
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.lines-card {
+    max-width: 1200px;
+    margin: 18px auto 0;
+    padding: 20px;
+}
+
+.lines-title {
+    font-size: 14px;
+    font-weight: 900;
+    margin-bottom: 12px;
+}
+
+.line-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.line-chip {
+    padding: 8px 11px;
+    border-radius: 12px;
+    background: #f3f4f8;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 5px;
+}
+
+.source {
+    max-width: 1200px;
+    margin: 15px auto 0;
+    color: rgba(255,255,255,.75);
+    font-size: 10px;
+    line-height: 1.5;
+}
+
+.error {
+    background: #fff0f1;
+    color: #c43b4b;
+    padding: 12px;
+    border-radius: 12px;
+    margin-top: 12px;
+    font-size: 12px;
+}
+
+@media(max-width: 850px) {
+    .app {
+        padding: 18px;
+    }
+
+    .grid {
+        grid-template-columns: 1fr;
+    }
+
+    #map {
+        height: 430px;
+    }
+
+    .map-card {
+        min-height: 430px;
+    }
+}
+
+</style>
+</head>
+
+<body>
+
+<div class="app">
+
+    <div class="top">
+        <div class="logo">LIVE <span>SUBWAY</span></div>
+        <div class="subtitle">
+            수도권 전체 노선 · 환승 경로 · 역 검색
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <div>
+
+            <div class="card search">
+
+                <div class="label">출발역</div>
+                <input id="origin"
+                       class="input"
+                       placeholder="예: 강남">
+
+                <button class="swap" onclick="swapStations()">↕</button>
+
+                <div class="label">도착역</div>
+                <input id="destination"
+                       class="input"
+                       placeholder="예: 홍대입구">
+
+                <button class="button" onclick="searchRoute()">
+                    최적 경로 찾기
+                </button>
+
+                <div id="error"></div>
+
+            </div>
+
+            <div id="routeCard"></div>
+
+        </div>
+
+        <div class="card map-card">
+
+            <div class="map-badge">
+                🚇 수도권 지하철
+            </div>
+
+            <div id="map"></div>
+
+        </div>
+
+    </div>
+
+    <div class="card lines-card">
+
+        <div class="lines-title">
+            지원 노선
+        </div>
+
+        <div id="lineGrid" class="line-grid"></div>
+
+    </div>
+
+    <div class="source">
+        노선/역 데이터: 공개 데이터 기반 그래프 데이터셋.
+        실제 운행시간·급행·막차·실시간 지연은 실제 교통 상황과 다를 수 있습니다.
+    </div>
+
+</div>
+
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+
+let map = L.map("map").setView([37.5665,126.9780],11);
+
+L.tileLayer(
+    "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap"
+    }
+).addTo(map);
+
+let routeLayer = L.layerGroup().addTo(map);
+
+
+async function searchRoute() {
+
+    const origin =
+        document.getElementById("origin").value.trim();
+
+    const destination =
+        document.getElementById("destination").value.trim();
+
+    const error =
+        document.getElementById("error");
+
+    error.innerHTML = "";
+
+    if (!origin || !destination) {
+        error.innerHTML =
+            '<div class="error">출발역과 도착역을 입력해주세요.</div>';
+        return;
+    }
+
+    try {
+
+        const response = await fetch(
+            `/api/route?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}`
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+
+            error.innerHTML =
+                `<div class="error">${data.error}</div>`;
+
+            return;
+        }
+
+        drawRoute(data);
+        showRouteCard(data);
+
+    } catch(e) {
+
+        error.innerHTML =
+            '<div class="error">경로를 불러오지 못했습니다.</div>';
+    }
+}
+
+
+function drawRoute(data) {
+
+    routeLayer.clearLayers();
+
+    const allPoints = [];
+
+    for (const segment of data.segments) {
+
+        const points =
+            segment.stations.map(
+                s => [s.lat, s.lon]
+            );
+
+        allPoints.push(...points);
+
+        L.polyline(
+            points,
+            {
+                color: segment.color,
+                weight: 8,
+                opacity: .9
+            }
+        ).addTo(routeLayer);
+
+        segment.stations.forEach(s => {
+
+            L.circleMarker(
+                [s.lat,s.lon],
+                {
+                    radius: 4,
+                    color: segment.color,
+                    weight: 2,
+                    fillColor: "#fff",
+                    fillOpacity: 1
+                }
+            )
+            .bindTooltip(
+                s.station + "역"
+            )
+            .addTo(routeLayer);
+
+        });
+
+    }
+
+    if (allPoints.length) {
+
+        L.circleMarker(
+            allPoints[0],
+            {
+                radius: 12,
+                color: "#fff",
+                weight: 3,
+                fillColor: "#ef4444",
+                fillOpacity: 1
+            }
+        )
+        .bindTooltip("출발", {permanent:true})
+        .addTo(routeLayer);
+
+        L.circleMarker(
+            allPoints[allPoints.length-1],
+            {
+                radius: 12,
+                color: "#fff",
+                weight: 3,
+                fillColor: "#2563eb",
+                fillOpacity: 1
+            }
+        )
+        .bindTooltip("도착", {permanent:true})
+        .addTo(routeLayer);
+
+        map.fitBounds(
+            L.latLngBounds(allPoints),
+            {padding:[45,45]}
+        );
+    }
+}
+
+
+function showRouteCard(data) {
+
+    let html = `
+        <div class="card route-card">
+
+            <div class="route-title">
+                ${data.origin.station} → ${data.destination.station}
+            </div>
+
+            <div class="route-info">
+                약 ${data.total_minutes}분
+                · 환승 ${data.transfer_count}회
+                · ${data.stations.length - 1}개 구간
+            </div>
+
+            <div class="route-list">
+    `;
+
+    html += `
+        <div class="step">
+            <div class="circle" style="background:#ef4444"></div>
+            <div class="step-text">
+                <b>${data.origin.station}역</b>에서 출발
+            </div>
+        </div>
+    `;
+
+    data.segments.forEach((segment, index) => {
+
+        const names =
+            segment.stations.map(
+                s => s.station
+            );
+
+        html += `
+            <div class="step">
+                <div class="circle"
+                     style="background:${segment.color}">
+                </div>
+
+                <div class="step-text">
+                    <b>${segment.line}</b><br>
+                    ${names[0]} → ${names[names.length-1]}
+                    · ${names.length-1}개 역
+                </div>
+            </div>
+        `;
+
+        if (index < data.transfers.length) {
+
+            const t = data.transfers[index];
+
+            html += `
+                <div class="step">
+                    <div class="circle"
+                         style="background:#8b8fa3">
+                    </div>
+
+                    <div class="step-text">
+                        <b>${t.station}역 환승</b><br>
+                        ${t.from_line} → ${t.to_line}
+                    </div>
+                </div>
+            `;
+        }
+
+    });
+
+    html += `
+        <div class="step">
+            <div class="circle" style="background:#2563eb"></div>
+            <div class="step-text">
+                <b>${data.destination.station}역</b> 도착
+            </div>
+        </div>
+
+            </div>
+        </div>
+    `;
+
+    document.getElementById("routeCard").innerHTML = html;
+}
+
+
+function swapStations() {
+
+    const a = document.getElementById("origin");
+    const b = document.getElementById("destination");
+
+    const temp = a.value;
+
+    a.value = b.value;
+    b.value = temp;
+}
+
+
+async function loadLines() {
+
+    const response =
+        await fetch("/api/lines");
+
+    const lines =
+        await response.json();
+
+    document.getElementById("lineGrid").innerHTML =
+        lines.map(line => `
+            <div class="line-chip">
+                <span class="dot"
+                      style="background:${line.color}">
+                </span>
+                ${line.name}
+            </div>
+        `).join("");
+}
+
+
+loadLines();
+
+</script>
+
+</body>
+</html>
 """
 
 
-def build_map(origin, dest, segments, steps, total_min, transfers, out_path):
-    seg_data = []
-    for seg in segments:
-        line = seg[0][1]
-        seg_data.append({
-            "line": line,
-            "color": LINES[line]["color"],
-            "stations": [{"name": n, "lat": COORDS[n][0], "lon": COORDS[n][1]} for n, _ in seg],
-        })
-
-    # 환승역 마커: 구간 사이 경계역
-    transfer_pts = []
-    for i in range(len(segments) - 1):
-        n = segments[i][-1][0]
-        transfer_pts.append({"name": n, "lat": COORDS[n][0], "lon": COORDS[n][1]})
-
-    # 사이드바 점 색: 출발(빨강) / 각 호선 색 / 환승(회색) / 도착(파랑)
-    dots = ["#d32f2f"]
-    for i, seg in enumerate(segments):
-        dots.append(LINES[seg[0][1]]["color"])
-        if i < len(segments) - 1:
-            dots.append("#757575")
-    dots.append("#1565c0")
-
-    data = {
-        "origin": {"name": origin, "lat": COORDS[origin][0], "lon": COORDS[origin][1]},
-        "dest": {"name": dest, "lat": COORDS[dest][0], "lon": COORDS[dest][1]},
-        "segments": seg_data,
-        "transfers": transfer_pts,
-        "steps": steps,
-        "dots": dots,
-        "total": round(total_min),
-        "transfer_count": transfers,
-    }
-    html = (MAP_TEMPLATE
-            .replace("__TITLE__", f"{origin} → {dest}")
-            .replace("__DATA__", json.dumps(data, ensure_ascii=False)))
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(html)
-    return out_path
+@app.route("/")
+def index():
+    return render_template_string(HTML)
 
 
-# ─────────────────────────────────────────────────────────────
-# 5. 음성 안내 (TTS)
-# ─────────────────────────────────────────────────────────────
-def _play_audio_file(path):
-    system = platform.system()
-    if system == "Darwin":
-        subprocess.run(["afplay", path])
-    elif system == "Windows":
-        os.startfile(path)  # 기본 플레이어로 재생
-    else:
-        for player in (["mpg123", "-q"], ["mpv", "--no-video"], ["ffplay", "-nodisp", "-autoexit"]):
-            if shutil.which(player[0]):
-                subprocess.run(player + [path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                return
-        raise RuntimeError("재생 가능한 오디오 플레이어가 없습니다.")
+@app.route("/api/lines")
+def api_lines():
+    unique = {}
+
+    for node in NODES.values():
+        key = node["line_key"]
+
+        if key not in unique:
+            unique[key] = {
+                "name": line_name(key),
+                "color": line_color(key),
+            }
+
+    return jsonify(
+        sorted(unique.values(), key=lambda x: x["name"])
+    )
 
 
-def speak(text):
-    """gTTS → pyttsx3 → macOS say 순서로 시도. 성공하면 True."""
-    try:
-        from gtts import gTTS
-        path = os.path.join(tempfile.gettempdir(), "subway_guide.mp3")
-        gTTS(text=text, lang="ko").save(path)
-        _play_audio_file(path)
-        return True
-    except Exception:
-        pass
-    try:
-        import pyttsx3
-        engine = pyttsx3.init()
-        for v in engine.getProperty("voices"):
-            blob = f"{v.id} {v.name} {getattr(v, 'languages', '')}".lower()
-            if "ko" in blob or "korean" in blob or "yuna" in blob:
-                engine.setProperty("voice", v.id)
-                break
-        engine.say(text)
-        engine.runAndWait()
-        return True
-    except Exception:
-        pass
-    if shutil.which("say"):
-        try:
-            subprocess.run(["say", "-v", "Yuna", text])
-            return True
-        except Exception:
-            pass
-    return False
+@app.route("/api/route")
+def api_route():
+
+    origin_query = request.args.get("origin", "")
+    destination_query = request.args.get("destination", "")
+
+    origin = find_station(origin_query)
+    destination = find_station(destination_query)
+
+    if isinstance(origin, list):
+
+        if len(origin) == 0:
+            return jsonify({
+                "error": f"'{origin_query}' 역을 찾을 수 없습니다."
+            }), 404
+
+        if len(origin) > 1:
+            return jsonify({
+                "error":
+                    "출발역 후보: " +
+                    ", ".join(x + "역" for x in origin)
+            }), 400
+
+        origin = origin[0]
+
+    if isinstance(destination, list):
+
+        if len(destination) == 0:
+            return jsonify({
+                "error": f"'{destination_query}' 역을 찾을 수 없습니다."
+            }), 404
+
+        if len(destination) > 1:
+            return jsonify({
+                "error":
+                    "도착역 후보: " +
+                    ", ".join(x + "역" for x in destination)
+            }), 400
+
+        destination = destination[0]
+
+    if not origin or not destination:
+        return jsonify({
+            "error": "역 이름을 입력해주세요."
+        }), 400
+
+    if origin == destination:
+        return jsonify({
+            "error": "출발역과 도착역이 같습니다."
+        }), 400
+
+    result = shortest_path(origin, destination)
+
+    if result is None:
+        return jsonify({
+            "error":
+                f"{origin}역에서 {destination}역까지의 경로를 찾을 수 없습니다."
+        }), 404
+
+    path, total_seconds = result
+
+    route = make_route(
+        path,
+        total_seconds
+    )
+
+    return jsonify(route)
 
 
-# ─────────────────────────────────────────────────────────────
-# 6. 역 이름 입력 처리
-# ─────────────────────────────────────────────────────────────
-def normalize(q):
-    q = q.strip().replace(" ", "")
-    return q[:-1] if q.endswith("역") and len(q) > 1 else q
+# ============================================================
+# 8. 실행
+# ============================================================
 
-
-def resolve_station(prompt, preset=None):
-    all_names = sorted(COORDS.keys())
-    query = preset
-    while True:
-        if query is None:
-            query = input(prompt)
-        q = normalize(query)
-        if q in COORDS:
-            return q
-        contains = [n for n in all_names if q and q in n]
-        if len(contains) == 1:
-            return contains[0]
-        candidates = contains or difflib.get_close_matches(q, all_names, n=5, cutoff=0.5)
-        if candidates:
-            print(f"'{query}' 와(과) 비슷한 역: " + ", ".join(candidates))
-            if len(candidates) == 1:
-                ans = input(f"'{candidates[0]}역'이 맞나요? (Enter=예, 아니면 다시 입력) ").strip()
-                if not ans:
-                    return candidates[0]
-                query = ans
-                continue
-        else:
-            print(f"'{query}' 역을 찾을 수 없습니다.")
-        print("(지원 역 예: 서울역, 강남, 홍대입구, 잠실 ...)")
-        query = None
-
-
-# ─────────────────────────────────────────────────────────────
-# 7. 메인
-# ─────────────────────────────────────────────────────────────
-def main():
-    ap = argparse.ArgumentParser(description="지하철 길안내 시스템")
-    ap.add_argument("origin", nargs="?", help="출발역")
-    ap.add_argument("dest", nargs="?", help="도착역")
-    ap.add_argument("--no-voice", action="store_true", help="음성 안내 끄기")
-    ap.add_argument("--no-map", action="store_true", help="지도 열지 않기")
-    ap.add_argument("--map-file", default=os.path.join(tempfile.gettempdir(), "subway_route.html"),
-                    help="지도 HTML 저장 경로")
-    args = ap.parse_args()
-
-    print("=" * 50)
-    print("  🚇 지하철 길안내 시스템")
-    print("=" * 50)
-
-    origin = resolve_station("출발역: ", args.origin)
-    dest = resolve_station("도착역: ", args.dest)
-
-    if origin == dest:
-        print("출발역과 도착역이 같습니다.")
-        return
-
-    path, total = shortest_path(origin, dest)
-    if path is None:
-        print("경로를 찾을 수 없습니다.")
-        return
-
-    steps, segments, transfers = build_guidance(origin, dest, path, total)
-
-    lat, lon = COORDS[origin]
-    print(f"\n📍 출발지: {origin}역 (위도 {lat:.4f}, 경도 {lon:.4f})")
-    print(f"🏁 도착지: {dest}역\n")
-    for i, s in enumerate(steps, 1):
-        print(f"  {i}. {s}")
-    print()
-
-    if not args.no_map:
-        out = build_map(origin, dest, segments, steps, total, transfers, args.map_file)
-        print(f"🗺  지도: {out}")
-        try:
-            webbrowser.open("file://" + os.path.abspath(out))
-        except Exception:
-            print("   (브라우저를 자동으로 열지 못했습니다. 위 파일을 직접 열어주세요.)")
-
-    if not args.no_voice:
-        print("🔊 음성 안내 중...")
-        if not speak(" ".join(steps)):
-            print("   음성 출력에 실패했습니다. `pip install gTTS` 또는 `pip install pyttsx3` 후 다시 시도하세요.")
+def open_browser():
+    time.sleep(1.2)
+    webbrowser.open("http://127.0.0.1:5000")
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except (KeyboardInterrupt, EOFError):
-        print("\n종료합니다.")
-        sys.exit(0)
+
+    print("=" * 60)
+    print("🚇 LIVE SUBWAY - 수도권 전체 노선")
+    print("=" * 60)
+    print(f"역/노선 노드: {len(NODES):,}개")
+    print(f"연결 간선: {sum(len(v) for v in GRAPH.values()) // 2:,}개")
+    print("브라우저: http://127.0.0.1:5000")
+    print("=" * 60)
+
+    threading.Thread(
+        target=open_browser,
+        daemon=True
+    ).start()
+
+    app.run(
+        host="127.0.0.1",
+        port=5000,
+        debug=False
+    )
