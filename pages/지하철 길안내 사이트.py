@@ -1,1061 +1,1148 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-🚇 수도권 지하철 길찾기 - 전체 노선 버전
-
-기능
-- 수도권 전철 전체 데이터 자동 다운로드/캐시
-- 출발역 → 도착역 최단시간 경로
-- 환승역/일반역 모두 표시
-- 사진처럼 카드형 파란·보라 UI
-- 노선 색상 표시
-- 경로 지도(Leaflet)
-- 음성 안내 선택 기능
-
-데이터
-- station_nodes.csv : 역·노선·좌표
-- station_edges.csv : 역과 역 사이 연결/소요시간
-데이터 출처 및 범위는 실행 화면의 출처 안내를 참고하세요.
-
-필요 패키지
-    pip install flask
-
-실행
-    python subway_all.py
-
-브라우저가 자동으로 열리고,
-    출발역 / 도착역
-을 입력하면 됩니다.
-"""
-
-import csv
-import heapq
+import html
 import json
-import math
-import os
-import threading
-import time
-import urllib.request
-import webbrowser
-from collections import defaultdict
 
-from flask import Flask, jsonify, render_template_string, request
+import requests
+import streamlit as st
+import streamlit.components.v1 as components
 
 
-# ============================================================
-# 1. 전체 수도권 전철 데이터
-# ============================================================
+# =========================================================
+# 기본 설정
+# =========================================================
+st.set_page_config(
+    page_title="Seoul WayFinder",
+    page_icon="🧭",
+    layout="wide",
+)
 
-BASE_URL = "https://raw.githubusercontent.com/minseok852/subway-etl/main/output/"
-NODE_URL = BASE_URL + "station_nodes.csv"
-EDGE_URL = BASE_URL + "station_edges.csv"
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+OSRM_URL = "https://router.project-osrm.org/route/v1/foot"
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "subway_data")
-NODE_FILE = os.path.join(DATA_DIR, "station_nodes.csv")
-EDGE_FILE = os.path.join(DATA_DIR, "station_edges.csv")
-
-os.makedirs(DATA_DIR, exist_ok=True)
-
-
-def download_if_needed(url, path):
-    if os.path.exists(path) and os.path.getsize(path) > 100:
-        return
-
-    print(f"데이터 다운로드 중: {os.path.basename(path)}")
-    try:
-        urllib.request.urlretrieve(url, path)
-    except Exception as e:
-        raise RuntimeError(
-            f"데이터 다운로드에 실패했습니다.\n"
-            f"인터넷 연결을 확인한 뒤 다시 실행하세요.\n\n{e}"
-        )
-
-
-download_if_needed(NODE_URL, NODE_FILE)
-download_if_needed(EDGE_URL, EDGE_FILE)
-
-
-# ============================================================
-# 2. 노선 색상
-# ============================================================
-
-LINE_COLORS = {
-    "1": "#0052A4",
-    "2": "#00A84D",
-    "3": "#EF7C1C",
-    "4": "#00A5DE",
-    "5": "#996CAC",
-    "6": "#CD7C2F",
-    "7": "#747F00",
-    "8": "#E6186C",
-    "9": "#BDB092",
-
-    "B": "#F5A200",      # 수인분당
-    "S": "#D31145",      # 신분당
-    "K": "#77C4A3",      # 경의중앙
-    "A": "#0090D2",      # 공항철도
-    "G": "#178C72",      # 경춘
-    "U": "#B7C450",      # 의정부
-    "E": "#FFCD00",      # 에버라인
-    "KK": "#003DA5",     # 경강
-    "W": "#B7B7B7",      # 우이신설
-    "SH": "#F06A00",     # 서해선
-    "KP": "#8B50A4",     # 김포골드
-    "I": "#759C2A",      # 인천1
-    "I2": "#F5A100",     # 인천2
-    "GTXA": "#3B82F6",
-    "M": "#777777",
+HEADERS = {
+    "User-Agent": "Seoul-WayFinder-Streamlit/1.0"
 }
 
 
-LINE_NAMES = {
-    "1": "1호선",
-    "2": "2호선",
-    "3": "3호선",
-    "4": "4호선",
-    "5": "5호선",
-    "6": "6호선",
-    "7": "7호선",
-    "8": "8호선",
-    "9": "9호선",
-    "B": "수인분당선",
-    "S": "신분당선",
-    "K": "경의·중앙선",
-    "A": "공항철도",
-    "G": "경춘선",
-    "U": "의정부경전철",
-    "E": "용인에버라인",
-    "KK": "경강선",
-    "W": "우이신설선",
-    "SH": "서해선",
-    "KP": "김포골드라인",
-    "I": "인천1호선",
-    "I2": "인천2호선",
-    "GTXA": "GTX-A",
-}
+# =========================================================
+# 디자인
+# =========================================================
+st.markdown(
+    """
+    <style>
+    .stApp {
+        background: #f6f7fb;
+    }
+
+    .hero {
+        background: linear-gradient(135deg, #4f46e5, #7c3aed);
+        color: white;
+        border-radius: 24px;
+        padding: 30px;
+        margin-bottom: 20px;
+        box-shadow: 0 12px 30px rgba(79,70,229,.18);
+    }
+
+    .hero h1 {
+        margin: 0 0 8px 0;
+        font-size: 2.1rem;
+    }
+
+    .hero p {
+        margin: 0;
+        opacity: .92;
+    }
+
+    .card {
+        background: white;
+        border-radius: 20px;
+        padding: 22px;
+        border: 1px solid #e8eaf1;
+        box-shadow: 0 7px 22px rgba(20,20,50,.05);
+        margin-bottom: 16px;
+    }
+
+    .route-card {
+        border-left: 6px solid #6366f1;
+    }
+
+    .big-number {
+        font-size: 1.6rem;
+        font-weight: 800;
+        color: #4338ca;
+    }
+
+    .muted {
+        color: #6b7280;
+        font-size: .9rem;
+    }
+
+    .step {
+        display: flex;
+        gap: 12px;
+        padding: 13px 0;
+        border-bottom: 1px solid #eeeef4;
+    }
+
+    .step:last-child {
+        border-bottom: none;
+    }
+
+    .step-no {
+        min-width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background: #eef2ff;
+        color: #4338ca;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 800;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
-def line_name(line_key):
-    return LINE_NAMES.get(str(line_key), str(line_key))
+# =========================================================
+# API - 장소 검색
+# =========================================================
+@st.cache_data(ttl=3600, show_spinner=False)
+def geocode(place):
+    place = place.strip()
 
-
-def line_color(line_key):
-    return LINE_COLORS.get(str(line_key), "#64748B")
-
-
-# ============================================================
-# 3. 데이터 읽기
-# ============================================================
-
-NODES = {}                  # node_id -> 정보
-STATIONS = defaultdict(list) # 역명 -> node_id 목록
-GRAPH = defaultdict(list)   # node_id -> (node_id, seconds, edge_type)
-
-with open(NODE_FILE, "r", encoding="utf-8-sig", newline="") as f:
-    reader = csv.DictReader(f)
-    for row in reader:
-        node_id = int(row["id"])
-        station = row["station_name"].strip()
-        line_key = row["line_key"].strip()
-
-        info = {
-            "id": node_id,
-            "station": station,
-            "line_key": line_key,
-            "line": line_name(line_key),
-            "lat": float(row["lat"]),
-            "lon": float(row["lon"]),
-        }
-
-        NODES[node_id] = info
-        STATIONS[station].append(node_id)
-
-
-with open(EDGE_FILE, "r", encoding="utf-8-sig", newline="") as f:
-    reader = csv.DictReader(f)
-    for row in reader:
-        a = int(row["from_node_id"])
-        b = int(row["to_node_id"])
-        seconds = float(row["seconds"])
-        edge_type = row.get("edge_type", "ride")
-
-        GRAPH[a].append((b, seconds, edge_type))
-        GRAPH[b].append((a, seconds, edge_type))
-
-
-# ============================================================
-# 4. 역 검색
-# ============================================================
-
-def normalize(text):
-    text = (text or "").strip().replace(" ", "")
-    if text.endswith("역") and len(text) > 1:
-        text = text[:-1]
-    return text
-
-
-def find_station(query):
-    q = normalize(query)
-
-    # 정확한 이름
-    for name in STATIONS:
-        if normalize(name) == q:
-            return name
-
-    # 포함 검색
-    matches = [name for name in STATIONS if q and q in normalize(name)]
-
-    if len(matches) == 1:
-        return matches[0]
-
-    if matches:
-        return matches[:10]
-
-    return []
-
-
-# ============================================================
-# 5. 최단시간 경로
-# ============================================================
-
-def shortest_path(origin_name, dest_name):
-    start_nodes = STATIONS.get(origin_name, [])
-    goal_nodes = set(STATIONS.get(dest_name, []))
-
-    if not start_nodes or not goal_nodes:
+    if not place:
         return None
 
-    dist = {}
-    prev = {}
-
-    heap = []
-
-    for s in start_nodes:
-        dist[s] = 0
-        heapq.heappush(heap, (0, s))
-
-    while heap:
-        cost, u = heapq.heappop(heap)
-
-        if cost != dist.get(u):
-            continue
-
-        if u in goal_nodes:
-            path = [u]
-            while path[-1] in prev:
-                path.append(prev[path[-1]])
-            path.reverse()
-            return path, cost
-
-        for v, weight, edge_type in GRAPH.get(u, []):
-            new_cost = cost + weight
-
-            if new_cost < dist.get(v, float("inf")):
-                dist[v] = new_cost
-                prev[v] = u
-                heapq.heappush(heap, (new_cost, v))
-
-    return None
-
-
-# ============================================================
-# 6. 경로 정리
-# ============================================================
-
-def make_route(path, total_seconds):
-    stations = [NODES[n] for n in path]
-
-    transfers = []
-    ride_segments = []
-
-    current = []
-    current_line = None
-
-    for i, node in enumerate(stations):
-        if i == 0:
-            current = [node]
-            current_line = node["line_key"]
-            continue
-
-        prev = stations[i - 1]
-
-        # 같은 노선
-        if node["line_key"] == current_line:
-            current.append(node)
-            continue
-
-        # 환승
-        ride_segments.append({
-            "line_key": current_line,
-            "line": line_name(current_line),
-            "color": line_color(current_line),
-            "stations": current[:],
-        })
-
-        transfers.append({
-            "station": prev["station"],
-            "lat": prev["lat"],
-            "lon": prev["lon"],
-            "from_line": line_name(current_line),
-            "to_line": line_name(node["line_key"]),
-        })
-
-        current = [node]
-        current_line = node["line_key"]
-
-    if current:
-        ride_segments.append({
-            "line_key": current_line,
-            "line": line_name(current_line),
-            "color": line_color(current_line),
-            "stations": current[:],
-        })
-
-    # 실제 경로에 환승 edge가 들어간 경우를 별도로 표시
-    clean_segments = []
-
-    for seg in ride_segments:
-        if len(seg["stations"]) >= 1:
-            clean_segments.append(seg)
-
-    return {
-        "origin": stations[0],
-        "destination": stations[-1],
-        "stations": stations,
-        "segments": clean_segments,
-        "transfers": transfers,
-        "transfer_count": len(transfers),
-        "total_seconds": total_seconds,
-        "total_minutes": max(1, round(total_seconds / 60)),
-    }
-
-
-# ============================================================
-# 7. Flask
-# ============================================================
-
-app = Flask(__name__)
-
-
-HTML = r"""
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-<title>LIVE SUBWAY</title>
-
-<link rel="stylesheet"
- href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-
-<style>
-
-* {
-    box-sizing: border-box;
-}
-
-body {
-    margin: 0;
-    font-family:
-        -apple-system,
-        BlinkMacSystemFont,
-        "Noto Sans KR",
-        "Malgun Gothic",
-        sans-serif;
-    background: #5269bd;
-    color: #20243a;
-}
-
-.app {
-    min-height: 100vh;
-    padding: 38px;
-}
-
-.top {
-    max-width: 1200px;
-    margin: auto;
-    color: white;
-    margin-bottom: 22px;
-}
-
-.logo {
-    font-size: 29px;
-    font-weight: 900;
-    letter-spacing: -1.5px;
-}
-
-.logo span {
-    opacity: .65;
-}
-
-.subtitle {
-    margin-top: 7px;
-    opacity: .78;
-    font-size: 13px;
-}
-
-.grid {
-    max-width: 1200px;
-    margin: auto;
-    display: grid;
-    grid-template-columns: 390px 1fr;
-    gap: 18px;
-}
-
-.card {
-    background: rgba(255,255,255,.96);
-    border-radius: 26px;
-    box-shadow: 0 16px 45px rgba(20,30,80,.18);
-}
-
-.search {
-    padding: 25px;
-}
-
-.label {
-    font-size: 12px;
-    font-weight: 800;
-    color: #777d99;
-    margin-bottom: 7px;
-}
-
-.input {
-    width: 100%;
-    border: 0;
-    outline: none;
-    padding: 16px 17px;
-    border-radius: 15px;
-    background: #f1f3fa;
-    font-size: 16px;
-    margin-bottom: 13px;
-}
-
-.swap {
-    width: 42px;
-    height: 42px;
-    border: 0;
-    border-radius: 50%;
-    background: #e9ecff;
-    color: #5269bd;
-    font-size: 20px;
-    cursor: pointer;
-    display: block;
-    margin: -3px auto 12px;
-}
-
-.button {
-    width: 100%;
-    border: 0;
-    padding: 16px;
-    border-radius: 15px;
-    background: #5269bd;
-    color: white;
-    font-size: 16px;
-    font-weight: 800;
-    cursor: pointer;
-    box-shadow: 0 8px 20px rgba(82,105,189,.3);
-}
-
-.route-card {
-    padding: 22px;
-    margin-top: 16px;
-}
-
-.route-title {
-    font-size: 18px;
-    font-weight: 900;
-}
-
-.route-info {
-    color: #747a92;
-    font-size: 12px;
-    margin-top: 5px;
-}
-
-.route-list {
-    margin-top: 18px;
-}
-
-.step {
-    display: flex;
-    gap: 12px;
-    padding: 11px 0;
-    border-bottom: 1px solid #eef0f5;
-}
-
-.step:last-child {
-    border-bottom: 0;
-}
-
-.circle {
-    flex: 0 0 13px;
-    width: 13px;
-    height: 13px;
-    margin-top: 4px;
-    border-radius: 50%;
-}
-
-.step-text {
-    font-size: 13px;
-    line-height: 1.45;
-}
-
-.map-card {
-    overflow: hidden;
-    min-height: 650px;
-    position: relative;
-}
-
-#map {
-    width: 100%;
-    height: 650px;
-}
-
-.map-badge {
-    position: absolute;
-    z-index: 999;
-    top: 17px;
-    left: 17px;
-    padding: 10px 14px;
-    background: rgba(255,255,255,.93);
-    border-radius: 13px;
-    box-shadow: 0 5px 20px rgba(0,0,0,.12);
-    font-size: 12px;
-    font-weight: 800;
-}
-
-.lines-card {
-    max-width: 1200px;
-    margin: 18px auto 0;
-    padding: 20px;
-}
-
-.lines-title {
-    font-size: 14px;
-    font-weight: 900;
-    margin-bottom: 12px;
-}
-
-.line-grid {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.line-chip {
-    padding: 8px 11px;
-    border-radius: 12px;
-    background: #f3f4f8;
-    font-size: 11px;
-    font-weight: 800;
-}
-
-.dot {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    margin-right: 5px;
-}
-
-.source {
-    max-width: 1200px;
-    margin: 15px auto 0;
-    color: rgba(255,255,255,.75);
-    font-size: 10px;
-    line-height: 1.5;
-}
-
-.error {
-    background: #fff0f1;
-    color: #c43b4b;
-    padding: 12px;
-    border-radius: 12px;
-    margin-top: 12px;
-    font-size: 12px;
-}
-
-@media(max-width: 850px) {
-    .app {
-        padding: 18px;
-    }
-
-    .grid {
-        grid-template-columns: 1fr;
-    }
-
-    #map {
-        height: 430px;
-    }
-
-    .map-card {
-        min-height: 430px;
-    }
-}
-
-</style>
-</head>
-
-<body>
-
-<div class="app">
-
-    <div class="top">
-        <div class="logo">LIVE <span>SUBWAY</span></div>
-        <div class="subtitle">
-            수도권 전체 노선 · 환승 경로 · 역 검색
-        </div>
-    </div>
-
-    <div class="grid">
-
-        <div>
-
-            <div class="card search">
-
-                <div class="label">출발역</div>
-                <input id="origin"
-                       class="input"
-                       placeholder="예: 강남">
-
-                <button class="swap" onclick="swapStations()">↕</button>
-
-                <div class="label">도착역</div>
-                <input id="destination"
-                       class="input"
-                       placeholder="예: 홍대입구">
-
-                <button class="button" onclick="searchRoute()">
-                    최적 경로 찾기
-                </button>
-
-                <div id="error"></div>
-
-            </div>
-
-            <div id="routeCard"></div>
-
-        </div>
-
-        <div class="card map-card">
-
-            <div class="map-badge">
-                🚇 수도권 지하철
-            </div>
-
-            <div id="map"></div>
-
-        </div>
-
-    </div>
-
-    <div class="card lines-card">
-
-        <div class="lines-title">
-            지원 노선
-        </div>
-
-        <div id="lineGrid" class="line-grid"></div>
-
-    </div>
-
-    <div class="source">
-        노선/역 데이터: 공개 데이터 기반 그래프 데이터셋.
-        실제 운행시간·급행·막차·실시간 지연은 실제 교통 상황과 다를 수 있습니다.
-    </div>
-
-</div>
-
-
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-<script>
-
-let map = L.map("map").setView([37.5665,126.9780],11);
-
-L.tileLayer(
-    "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-    {
-        maxZoom: 19,
-        attribution: "&copy; OpenStreetMap"
-    }
-).addTo(map);
-
-let routeLayer = L.layerGroup().addTo(map);
-
-
-async function searchRoute() {
-
-    const origin =
-        document.getElementById("origin").value.trim();
-
-    const destination =
-        document.getElementById("destination").value.trim();
-
-    const error =
-        document.getElementById("error");
-
-    error.innerHTML = "";
-
-    if (!origin || !destination) {
-        error.innerHTML =
-            '<div class="error">출발역과 도착역을 입력해주세요.</div>';
-        return;
-    }
-
-    try {
-
-        const response = await fetch(
-            `/api/route?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}`
-        );
-
-        const data = await response.json();
-
-        if (!response.ok) {
-
-            error.innerHTML =
-                `<div class="error">${data.error}</div>`;
-
-            return;
+    try:
+        response = requests.get(
+            NOMINATIM_URL,
+            params={
+                "q": f"{place}, 대한민국",
+                "format": "jsonv2",
+                "limit": 1,
+                "countrycodes": "kr",
+            },
+            headers=HEADERS,
+            timeout=10,
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        if not data:
+            return None
+
+        item = data[0]
+
+        return {
+            "lat": float(item["lat"]),
+            "lon": float(item["lon"]),
+            "display_name": item.get("display_name", place),
         }
 
-        drawRoute(data);
-        showRouteCard(data);
+    except (
+        requests.RequestException,
+        ValueError,
+        KeyError,
+        IndexError,
+    ):
+        return None
 
-    } catch(e) {
 
-        error.innerHTML =
-            '<div class="error">경로를 불러오지 못했습니다.</div>';
+# =========================================================
+# API - 경로 검색
+# =========================================================
+@st.cache_data(ttl=300, show_spinner=False)
+def get_route(start_lat, start_lon, end_lat, end_lon):
+
+    url = (
+        f"{OSRM_URL}/"
+        f"{start_lon},{start_lat};"
+        f"{end_lon},{end_lat}"
+    )
+
+    try:
+        response = requests.get(
+            url,
+            params={
+                "overview": "full",
+                "geometries": "geojson",
+                "steps": "true",
+            },
+            headers=HEADERS,
+            timeout=15,
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        if data.get("code") != "Ok":
+            return None
+
+        if not data.get("routes"):
+            return None
+
+        route = data["routes"][0]
+
+        return {
+            "distance_m": route.get("distance", 0),
+            "duration_s": route.get("duration", 0),
+            "geometry": route["geometry"]["coordinates"],
+            "legs": route.get("legs", []),
+        }
+
+    except (
+        requests.RequestException,
+        ValueError,
+        KeyError,
+        IndexError,
+    ):
+        return None
+
+
+# =========================================================
+# 거리 / 시간 표시
+# =========================================================
+def format_distance(meters):
+
+    if meters < 1000:
+        return f"{round(meters)}m"
+
+    return f"{meters / 1000:.1f}km"
+
+
+def format_duration(seconds):
+
+    minutes = max(1, round(seconds / 60))
+
+    if minutes < 60:
+        return f"{minutes}분"
+
+    hours = minutes // 60
+    rest = minutes % 60
+
+    if rest == 0:
+        return f"{hours}시간"
+
+    return f"{hours}시간 {rest}분"
+
+
+# =========================================================
+# 방향 안내
+# =========================================================
+def direction_text(modifier, road_name):
+
+    road = road_name.strip() if road_name else "도로"
+
+    directions = {
+        "left": "왼쪽으로",
+        "right": "오른쪽으로",
+        "slight left": "왼쪽 방향으로",
+        "slight right": "오른쪽 방향으로",
+        "sharp left": "왼쪽으로 크게",
+        "sharp right": "오른쪽으로 크게",
+        "straight": "직진하여",
+        "uturn": "유턴하여",
     }
-}
+
+    direction = directions.get(
+        modifier,
+        "이동하여"
+    )
+
+    return f"{direction} {road}"
 
 
-function drawRoute(data) {
+# =========================================================
+# 이동 단계 만들기
+# =========================================================
+def make_steps(route):
 
-    routeLayer.clearLayers();
+    result = []
 
-    const allPoints = [];
+    for leg in route.get("legs", []):
 
-    for (const segment of data.segments) {
+        for step in leg.get("steps", []):
 
-        const points =
-            segment.stations.map(
-                s => [s.lat, s.lon]
-            );
+            maneuver = step.get("maneuver", {})
 
-        allPoints.push(...points);
+            modifier = maneuver.get(
+                "modifier",
+                "straight"
+            )
 
-        L.polyline(
-            points,
-            {
-                color: segment.color,
-                weight: 8,
-                opacity: .9
-            }
-        ).addTo(routeLayer);
+            name = step.get("name", "")
 
-        segment.stations.forEach(s => {
+            distance = step.get(
+                "distance",
+                0
+            )
 
-            L.circleMarker(
-                [s.lat,s.lon],
+            if distance < 15:
+                continue
+
+            result.append(
                 {
-                    radius: 4,
-                    color: segment.color,
-                    weight: 2,
-                    fillColor: "#fff",
-                    fillOpacity: 1
+                    "text": direction_text(
+                        modifier,
+                        name
+                    ),
+                    "distance": distance,
                 }
             )
-            .bindTooltip(
-                s.station + "역"
+
+    return result[:12]
+
+
+# =========================================================
+# 음성 안내 문장
+# =========================================================
+def make_voice_text(
+    origin_name,
+    destination_name,
+    route,
+    steps,
+):
+
+    text = []
+
+    text.append(
+        f"{origin_name}에서 "
+        f"{destination_name}까지 "
+        f"안내를 시작합니다."
+    )
+
+    text.append(
+        f"예상 거리는 "
+        f"{format_distance(route['distance_m'])}, "
+        f"예상 시간은 약 "
+        f"{format_duration(route['duration_s'])}입니다."
+    )
+
+    for i, step in enumerate(
+        steps[:8],
+        start=1
+    ):
+
+        text.append(
+            f"{i}번째 안내입니다. "
+            f"{step['text']}, "
+            f"{format_distance(step['distance'])} "
+            f"이동하세요."
+        )
+
+    text.append(
+        "목적지에 도착하면 "
+        "안내가 끝납니다."
+    )
+
+    return " ".join(text)
+
+
+# =========================================================
+# 지도 만들기
+# =========================================================
+def make_map(
+    origin,
+    destination,
+    route,
+):
+
+    route_coords = route["geometry"]
+
+    # OSRM은 [경도, 위도]
+    # Leaflet은 [위도, 경도]
+    leaflet_route = [
+        [lat, lon]
+        for lon, lat in route_coords
+    ]
+
+    route_json = json.dumps(
+        leaflet_route,
+        ensure_ascii=False,
+    )
+
+    origin_lat = origin["lat"]
+    origin_lon = origin["lon"]
+
+    destination_lat = destination["lat"]
+    destination_lon = destination["lon"]
+
+    origin_label = html.escape(
+        origin["display_name"][:100]
+    )
+
+    destination_label = html.escape(
+        destination["display_name"][:100]
+    )
+
+    return f"""
+    <!DOCTYPE html>
+
+    <html lang="ko">
+
+    <head>
+
+    <meta charset="utf-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width,
+        initial-scale=1.0"
+    >
+
+    <link
+        rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    >
+
+    <style>
+
+    html,
+    body,
+    #map {{
+        height: 100%;
+        margin: 0;
+    }}
+
+    #map {{
+        min-height: 540px;
+        border-radius: 18px;
+        overflow: hidden;
+    }}
+
+    </style>
+
+    </head>
+
+    <body>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">
+    </script>
+
+    <script>
+
+    const origin = [
+        {origin_lat},
+        {origin_lon}
+    ];
+
+    const destination = [
+        {destination_lat},
+        {destination_lon}
+    ];
+
+    const route = {route_json};
+
+    const map = L.map("map").setView(
+        origin,
+        14
+    );
+
+    L.tileLayer(
+        "https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png",
+        {{
+            maxZoom: 19,
+            attribution:
+                "&copy; OpenStreetMap contributors"
+        }}
+    ).addTo(map);
+
+
+    // 출발지 아이콘
+    const originIcon = L.divIcon({{
+        className: "",
+
+        html:
+            '<div style="' +
+            'width:18px;' +
+            'height:18px;' +
+            'border-radius:50%;' +
+            'background:#4f46e5;' +
+            'border:4px solid white;' +
+            'box-shadow:0 2px 8px #555;' +
+            '"></div>',
+
+        iconSize: [26, 26],
+
+        iconAnchor: [13, 13]
+    }});
+
+
+    // 도착지 아이콘
+    const destinationIcon = L.divIcon({{
+        className: "",
+
+        html:
+            '<div style="' +
+            'width:18px;' +
+            'height:18px;' +
+            'border-radius:50%;' +
+            'background:#ef4444;' +
+            'border:4px solid white;' +
+            'box-shadow:0 2px 8px #555;' +
+            '"></div>',
+
+        iconSize: [26, 26],
+
+        iconAnchor: [13, 13]
+    }});
+
+
+    L.marker(
+        origin,
+        {{
+            icon: originIcon
+        }}
+    )
+    .addTo(map)
+    .bindPopup(
+        "<b>출발지</b><br>{origin_label}"
+    );
+
+
+    L.marker(
+        destination,
+        {{
+            icon: destinationIcon
+        }}
+    )
+    .addTo(map)
+    .bindPopup(
+        "<b>도착지</b><br>{destination_label}"
+    );
+
+
+    const line = L.polyline(
+        route,
+        {{
+            color: "#6366f1",
+            weight: 6,
+            opacity: 0.85
+        }}
+    ).addTo(map);
+
+
+    map.fitBounds(
+        line.getBounds(),
+        {{
+            padding: [30, 30]
+        }}
+    );
+
+    </script>
+
+    </body>
+    </html>
+    """
+
+
+# =========================================================
+# 제목
+# =========================================================
+st.markdown(
+    """
+    <div class="hero">
+
+        <h1>🧭 Seoul WayFinder</h1>
+
+        <p>
+        출발지와 도착지를 입력하면
+        지도와 음성으로 이동 경로를 안내합니다.
+        </p>
+
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# =========================================================
+# 입력
+# =========================================================
+st.markdown(
+    '<div class="card">',
+    unsafe_allow_html=True,
+)
+
+col1, col2 = st.columns(2)
+
+
+with col1:
+
+    origin_input = st.text_input(
+        "📍 출발지",
+        placeholder="예: 서울역",
+    )
+
+
+with col2:
+
+    destination_input = st.text_input(
+        "🏁 도착지",
+        placeholder="예: 경복궁",
+    )
+
+
+st.caption(
+    "역 이름, 장소 이름 또는 주소를 입력할 수 있습니다."
+)
+
+
+search_button = st.button(
+    "🧭 경로 찾기",
+    type="primary",
+    use_container_width=True,
+)
+
+st.markdown(
+    "</div>",
+    unsafe_allow_html=True,
+)
+
+
+# =========================================================
+# 경로 검색
+# =========================================================
+if search_button:
+
+    if (
+        not origin_input.strip()
+        or not destination_input.strip()
+    ):
+
+        st.warning(
+            "출발지와 도착지를 모두 입력해주세요."
+        )
+
+        st.stop()
+
+
+    with st.spinner(
+        "장소와 경로를 찾는 중입니다..."
+    ):
+
+        origin = geocode(
+            origin_input
+        )
+
+        destination = geocode(
+            destination_input
+        )
+
+
+        if origin is None:
+
+            st.error(
+                "출발지를 찾지 못했습니다. "
+                "역 이름이나 주소를 "
+                "조금 더 정확하게 입력해주세요."
             )
-            .addTo(routeLayer);
 
-        });
+            st.stop()
 
-    }
 
-    if (allPoints.length) {
+        if destination is None:
 
-        L.circleMarker(
-            allPoints[0],
-            {
-                radius: 12,
-                color: "#fff",
-                weight: 3,
-                fillColor: "#ef4444",
-                fillOpacity: 1
-            }
+            st.error(
+                "도착지를 찾지 못했습니다. "
+                "역 이름이나 주소를 "
+                "조금 더 정확하게 입력해주세요."
+            )
+
+            st.stop()
+
+
+        route = get_route(
+            origin["lat"],
+            origin["lon"],
+            destination["lat"],
+            destination["lon"],
         )
-        .bindTooltip("출발", {permanent:true})
-        .addTo(routeLayer);
 
-        L.circleMarker(
-            allPoints[allPoints.length-1],
-            {
-                radius: 12,
-                color: "#fff",
-                weight: 3,
-                fillColor: "#2563eb",
-                fillOpacity: 1
-            }
+
+    if route is None:
+
+        st.error(
+            "경로를 계산하지 못했습니다. "
+            "잠시 후 다시 시도해주세요."
         )
-        .bindTooltip("도착", {permanent:true})
-        .addTo(routeLayer);
 
-        map.fitBounds(
-            L.latLngBounds(allPoints),
-            {padding:[45,45]}
-        );
-    }
-}
+        st.stop()
 
 
-function showRouteCard(data) {
+    # 결과 저장
+    st.session_state.origin = origin
+    st.session_state.destination = destination
+    st.session_state.route = route
+    st.session_state.origin_name = origin_input
+    st.session_state.destination_name = destination_input
 
-    let html = `
-        <div class="card route-card">
 
-            <div class="route-title">
-                ${data.origin.station} → ${data.destination.station}
-            </div>
+# =========================================================
+# 결과
+# =========================================================
+if (
+    "route" in st.session_state
+    and st.session_state.route is not None
+):
 
-            <div class="route-info">
-                약 ${data.total_minutes}분
-                · 환승 ${data.transfer_count}회
-                · ${data.stations.length - 1}개 구간
-            </div>
+    origin = st.session_state.origin
+    destination = st.session_state.destination
+    route = st.session_state.route
 
-            <div class="route-list">
-    `;
+    origin_name = st.session_state.origin_name
+    destination_name = st.session_state.destination_name
 
-    html += `
-        <div class="step">
-            <div class="circle" style="background:#ef4444"></div>
-            <div class="step-text">
-                <b>${data.origin.station}역</b>에서 출발
-            </div>
+    steps = make_steps(route)
+
+
+    # -----------------------------------------------------
+    # 요약
+    # -----------------------------------------------------
+    st.markdown(
+        '<div class="card route-card">',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        f"""
+        <div class="muted">
+            현재 선택한 경로
         </div>
-    `;
 
-    data.segments.forEach((segment, index) => {
+        <h2>
+            {html.escape(origin_name)}
+            →
+            {html.escape(destination_name)}
+        </h2>
+        """,
+        unsafe_allow_html=True,
+    )
 
-        const names =
-            segment.stations.map(
-                s => s.station
-            );
 
-        html += `
-            <div class="step">
-                <div class="circle"
-                     style="background:${segment.color}">
-                </div>
+    c1, c2, c3 = st.columns(3)
 
-                <div class="step-text">
-                    <b>${segment.line}</b><br>
-                    ${names[0]} → ${names[names.length-1]}
-                    · ${names.length-1}개 역
-                </div>
+
+    with c1:
+
+        st.markdown(
+            f"""
+            <div class="big-number">
+                {format_duration(route["duration_s"])}
             </div>
-        `;
 
-        if (index < data.transfers.length) {
+            <div class="muted">
+                예상 이동 시간
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-            const t = data.transfers[index];
 
-            html += `
-                <div class="step">
-                    <div class="circle"
-                         style="background:#8b8fa3">
+    with c2:
+
+        st.markdown(
+            f"""
+            <div class="big-number">
+                {format_distance(route["distance_m"])}
+            </div>
+
+            <div class="muted">
+                총 거리
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+    with c3:
+
+        st.markdown(
+            f"""
+            <div class="big-number">
+                {len(steps)}
+            </div>
+
+            <div class="muted">
+                주요 안내 단계
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+    st.markdown(
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+    # -----------------------------------------------------
+    # 지도 + 안내
+    # -----------------------------------------------------
+    left, right = st.columns(
+        [1.6, 1]
+    )
+
+
+    with left:
+
+        st.markdown(
+            '<div class="card">',
+            unsafe_allow_html=True,
+        )
+
+        st.subheader(
+            "🗺️ 경로 지도"
+        )
+
+        components.html(
+            make_map(
+                origin,
+                destination,
+                route,
+            ),
+            height=570,
+            scrolling=False,
+        )
+
+        st.markdown(
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+
+    with right:
+
+        # -----------------------------------------------
+        # 음성
+        # -----------------------------------------------
+        st.markdown(
+            '<div class="card">',
+            unsafe_allow_html=True,
+        )
+
+        st.subheader(
+            "🔊 음성 안내"
+        )
+
+        voice_text = make_voice_text(
+            origin_name,
+            destination_name,
+            route,
+            steps,
+        )
+
+        voice_json = json.dumps(
+            voice_text,
+            ensure_ascii=False,
+        )
+
+
+        components.html(
+            f"""
+            <script>
+
+            function startVoice() {{
+
+                if (!("speechSynthesis" in window)) {{
+
+                    document.getElementById(
+                        "message"
+                    ).innerText =
+                        "이 브라우저는 음성 안내를 지원하지 않습니다.";
+
+                    return;
+                }}
+
+
+                window.speechSynthesis.cancel();
+
+
+                const text =
+                    {voice_json};
+
+
+                const speech =
+                    new SpeechSynthesisUtterance(
+                        text
+                    );
+
+
+                speech.lang = "ko-KR";
+
+                speech.rate = 0.95;
+
+                speech.pitch = 1.0;
+
+
+                window.speechSynthesis.speak(
+                    speech
+                );
+
+
+                document.getElementById(
+                    "message"
+                ).innerText =
+                    "🔊 음성 안내가 재생되었습니다.";
+
+            }}
+
+
+            function stopVoice() {{
+
+                if (
+                    "speechSynthesis"
+                    in window
+                ) {{
+
+                    window.speechSynthesis.cancel();
+
+                    document.getElementById(
+                        "message"
+                    ).innerText =
+                        "⏹️ 음성 안내를 중지했습니다.";
+
+                }}
+
+            }}
+
+            </script>
+
+
+            <button
+                onclick="startVoice()"
+                style="
+                    width:100%;
+                    padding:14px;
+                    border:0;
+                    border-radius:12px;
+                    background:#4f46e5;
+                    color:white;
+                    font-size:16px;
+                    font-weight:700;
+                    cursor:pointer;
+                    margin-bottom:9px;
+                "
+            >
+                🔊 음성 안내 시작
+            </button>
+
+
+            <button
+                onclick="stopVoice()"
+                style="
+                    width:100%;
+                    padding:12px;
+                    border:1px solid #ddd;
+                    border-radius:12px;
+                    background:white;
+                    color:#333;
+                    font-size:15px;
+                    cursor:pointer;
+                "
+            >
+                ⏹️ 음성 안내 중지
+            </button>
+
+
+            <p
+                id="message"
+                style="
+                    font-family:sans-serif;
+                    color:#666;
+                    font-size:13px;
+                "
+            >
+                버튼을 누르면
+                한국어 음성 안내가 시작됩니다.
+            </p>
+            """,
+            height=190,
+        )
+
+        st.markdown(
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+
+        # -----------------------------------------------
+        # 이동 안내
+        # -----------------------------------------------
+        st.markdown(
+            '<div class="card">',
+            unsafe_allow_html=True,
+        )
+
+        st.subheader(
+            "🚶 이동 안내"
+        )
+
+
+        if not steps:
+
+            st.info(
+                "세부 이동 안내가 없습니다."
+            )
+
+        else:
+
+            for i, step in enumerate(
+                steps,
+                start=1,
+            ):
+
+                st.markdown(
+                    f"""
+                    <div class="step">
+
+                        <div class="step-no">
+                            {i}
+                        </div>
+
+                        <div>
+
+                            <b>
+                                {html.escape(step["text"])}
+                            </b>
+
+                            <br>
+
+                            <span class="muted">
+                                약
+                                {format_distance(step["distance"])}
+                            </span>
+
+                        </div>
+
                     </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
-                    <div class="step-text">
-                        <b>${t.station}역 환승</b><br>
-                        ${t.from_line} → ${t.to_line}
-                    </div>
-                </div>
-            `;
-        }
 
-    });
+        st.markdown(
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
-    html += `
+
+    # -----------------------------------------------------
+    # 안내
+    # -----------------------------------------------------
+    st.info(
+        "💡 지도는 OpenStreetMap, 경로 계산은 OSRM을 사용합니다. "
+        "현재 버전은 도보 경로 중심이며 실시간 지하철 운행 정보는 포함하지 않습니다."
+    )
+
+
+# =========================================================
+# 처음 화면
+# =========================================================
+else:
+
+    st.markdown(
+        """
+        <div class="card">
+
+        <h3>
+            ✨ 이렇게 사용하세요
+        </h3>
+
+
         <div class="step">
-            <div class="circle" style="background:#2563eb"></div>
-            <div class="step-text">
-                <b>${data.destination.station}역</b> 도착
+
+            <div class="step-no">
+                1
             </div>
-        </div>
 
-            </div>
-        </div>
-    `;
+            <div>
 
-    document.getElementById("routeCard").innerHTML = html;
-}
+                <b>
+                    출발지 입력
+                </b>
 
+                <br>
 
-function swapStations() {
-
-    const a = document.getElementById("origin");
-    const b = document.getElementById("destination");
-
-    const temp = a.value;
-
-    a.value = b.value;
-    b.value = temp;
-}
-
-
-async function loadLines() {
-
-    const response =
-        await fetch("/api/lines");
-
-    const lines =
-        await response.json();
-
-    document.getElementById("lineGrid").innerHTML =
-        lines.map(line => `
-            <div class="line-chip">
-                <span class="dot"
-                      style="background:${line.color}">
+                <span class="muted">
+                    서울역, 강남역 또는 주소를 입력하세요.
                 </span>
-                ${line.name}
+
             </div>
-        `).join("");
-}
+
+        </div>
 
 
-loadLines();
+        <div class="step">
 
-</script>
+            <div class="step-no">
+                2
+            </div>
 
-</body>
-</html>
-"""
+            <div>
+
+                <b>
+                    도착지 입력
+                </b>
+
+                <br>
+
+                <span class="muted">
+                    가고 싶은 장소를 입력하세요.
+                </span>
+
+            </div>
+
+        </div>
 
 
-@app.route("/")
-def index():
-    return render_template_string(HTML)
+        <div class="step">
 
+            <div class="step-no">
+                3
+            </div>
 
-@app.route("/api/lines")
-def api_lines():
-    unique = {}
+            <div>
 
-    for node in NODES.values():
-        key = node["line_key"]
+                <b>
+                    경로 찾기
+                </b>
 
-        if key not in unique:
-            unique[key] = {
-                "name": line_name(key),
-                "color": line_color(key),
-            }
+                <br>
 
-    return jsonify(
-        sorted(unique.values(), key=lambda x: x["name"])
+                <span class="muted">
+                    지도와 음성으로 이동 방법을 확인하세요.
+                </span>
+
+            </div>
+
+        </div>
+
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
 
-@app.route("/api/route")
-def api_route():
-
-    origin_query = request.args.get("origin", "")
-    destination_query = request.args.get("destination", "")
-
-    origin = find_station(origin_query)
-    destination = find_station(destination_query)
-
-    if isinstance(origin, list):
-
-        if len(origin) == 0:
-            return jsonify({
-                "error": f"'{origin_query}' 역을 찾을 수 없습니다."
-            }), 404
-
-        if len(origin) > 1:
-            return jsonify({
-                "error":
-                    "출발역 후보: " +
-                    ", ".join(x + "역" for x in origin)
-            }), 400
-
-        origin = origin[0]
-
-    if isinstance(destination, list):
-
-        if len(destination) == 0:
-            return jsonify({
-                "error": f"'{destination_query}' 역을 찾을 수 없습니다."
-            }), 404
-
-        if len(destination) > 1:
-            return jsonify({
-                "error":
-                    "도착역 후보: " +
-                    ", ".join(x + "역" for x in destination)
-            }), 400
-
-        destination = destination[0]
-
-    if not origin or not destination:
-        return jsonify({
-            "error": "역 이름을 입력해주세요."
-        }), 400
-
-    if origin == destination:
-        return jsonify({
-            "error": "출발역과 도착역이 같습니다."
-        }), 400
-
-    result = shortest_path(origin, destination)
-
-    if result is None:
-        return jsonify({
-            "error":
-                f"{origin}역에서 {destination}역까지의 경로를 찾을 수 없습니다."
-        }), 404
-
-    path, total_seconds = result
-
-    route = make_route(
-        path,
-        total_seconds
+    st.success(
+        "예시: 출발지에 '서울역', "
+        "도착지에 '경복궁'을 입력해보세요."
     )
 
-    return jsonify(route)
 
-
-# ============================================================
-# 8. 실행
-# ============================================================
-
-def open_browser():
-    time.sleep(1.2)
-    webbrowser.open("http://127.0.0.1:5000")
-
-
-if __name__ == "__main__":
-
-    print("=" * 60)
-    print("🚇 LIVE SUBWAY - 수도권 전체 노선")
-    print("=" * 60)
-    print(f"역/노선 노드: {len(NODES):,}개")
-    print(f"연결 간선: {sum(len(v) for v in GRAPH.values()) // 2:,}개")
-    print("브라우저: http://127.0.0.1:5000")
-    print("=" * 60)
-
-    threading.Thread(
-        target=open_browser,
-        daemon=True
-    ).start()
-
-    app.run(
-        host="127.0.0.1",
-        port=5000,
-        debug=False
-    )
+# =========================================================
+# 출처
+# =========================================================
+st.caption(
+    "지도: OpenStreetMap · "
+    "장소 검색: Nominatim · "
+    "경로 계산: OSRM · "
+    "음성: 브라우저 Web Speech API"
+)
