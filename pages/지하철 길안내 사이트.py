@@ -3,101 +3,94 @@ import requests
 import math
 import streamlit.components.v1 as components
 
-from streamlit_geolocation import streamlit_geolocation
+from streamlit_gps_location import gps_location_button
 
 
-# ==========================================
+# =========================
 # 기본 설정
-# ==========================================
+# =========================
 
 st.set_page_config(
-    page_title="지하철 길찾기",
+    page_title="지하철 길안내",
     page_icon="🚇",
     layout="centered"
 )
 
-
-# ==========================================
-# 화면 디자인
-# ==========================================
-
 st.markdown("""
 <style>
-
-.main-title {
+.제목 {
     font-size: 32px;
     font-weight: 800;
-    margin-bottom: 5px;
 }
 
-.sub-title {
-    color: #666666;
-    margin-bottom: 25px;
+.설명 {
+    color: #666;
+    margin-bottom: 20px;
 }
 
-.step-box {
+.단계 {
+    background: #f5f7fa;
     padding: 18px;
     border-radius: 16px;
-    background: #f5f7fa;
-    border: 1px solid #e2e5e9;
     margin-bottom: 12px;
 }
 
-.step-title {
+.단계제목 {
     font-size: 19px;
-    font-weight: 700;
+    font-weight: bold;
     margin-bottom: 8px;
 }
-
 </style>
 """, unsafe_allow_html=True)
 
 
 st.markdown(
-    '<div class="main-title">🚇 지하철 길찾기</div>',
+    '<div class="제목">🚇 지하철 길안내</div>',
     unsafe_allow_html=True
 )
 
 st.markdown(
-    '<div class="sub-title">현재 위치에서 목적지까지 가는 길을 안내합니다.</div>',
+    '<div class="설명">현재 위치에서 목적지까지 가는 길을 안내합니다.</div>',
     unsafe_allow_html=True
 )
 
 
-# ==========================================
+# =========================
 # 현재 위치
-# ==========================================
+# =========================
 
 st.markdown("## 📍 현재 위치")
 
-위치 = streamlit_geolocation()
+위치 = gps_location_button(
+    buttonText="📍 현재 위치 가져오기"
+)
 
 
-if 위치 is None:
-    st.info("위치 버튼을 눌러 현재 위치를 확인해주세요.")
+# 위치를 아직 가져오지 않았을 때
+if not 위치:
+    st.info("위 버튼을 눌러 현재 위치를 허용해주세요.")
     st.stop()
 
+
+# =========================
+# 위치 정보 확인
+# =========================
 
 현재위도 = 위치.get("latitude")
 현재경도 = 위치.get("longitude")
 
 
 if 현재위도 is None or 현재경도 is None:
-
-    st.warning(
-        "현재 위치를 가져오지 못했습니다. "
-        "브라우저에서 위치 권한을 허용해주세요."
-    )
-
+    st.warning("현재 위치를 가져오지 못했습니다.")
     st.stop()
 
 
 st.success("현재 위치를 확인했습니다.")
 
 
-# ==========================================
+# =========================
 # 목적지
-# ==========================================
+# =========================
 
 st.markdown("## 🎯 목적지")
 
@@ -106,33 +99,27 @@ st.markdown("## 🎯 목적지")
     placeholder="예: 강남역"
 )
 
-
-찾기 = st.button(
+길찾기 = st.button(
     "🚇 길찾기 시작",
     use_container_width=True
 )
 
 
-# 아무것도 누르지 않았으면 지도 표시 안 함
-if not 찾기:
+# 목적지를 입력하지 않았으면 아무것도 표시하지 않음
+if not 길찾기:
     st.stop()
 
-
-# ==========================================
-# 목적지 입력 확인
-# ==========================================
-
-목적지 = 목적지.strip()
-
-
-if 목적지 == "":
+if 목적지.strip() == "":
     st.warning("목적지 역을 입력해주세요.")
     st.stop()
 
 
-# ==========================================
-# 목적지 역 위치 찾기
-# ==========================================
+목적지 = 목적지.strip()
+
+
+# =========================
+# 목적지 역 찾기
+# =========================
 
 try:
 
@@ -145,52 +132,48 @@ try:
             "countrycodes": "kr"
         },
         headers={
-            "User-Agent": "subway-route-app"
+            "User-Agent": "seoul-subway-guide"
         },
         timeout=10
     )
 
     응답.raise_for_status()
 
-    검색결과 = 응답.json()
+    결과 = 응답.json()
 
 except requests.exceptions.Timeout:
 
-    st.error("역 위치를 찾는 데 시간이 너무 오래 걸렸습니다.")
+    st.error("역 정보를 가져오는 데 시간이 너무 오래 걸렸습니다.")
     st.stop()
 
 except requests.exceptions.RequestException:
 
-    st.error("역 위치를 찾는 서버에 연결하지 못했습니다.")
+    st.error("역 정보를 가져오지 못했습니다.")
     st.stop()
 
 except Exception:
 
-    st.error("역 위치를 찾는 중 문제가 발생했습니다.")
+    st.error("역을 찾는 중 문제가 발생했습니다.")
     st.stop()
 
 
-if not 검색결과:
+if len(결과) == 0:
 
     st.warning(
-        f"'{목적지}'역을 찾지 못했습니다. "
-        "역 이름을 다시 확인해주세요."
+        f"'{목적지}'역을 찾지 못했습니다."
     )
 
     st.stop()
 
 
-# ==========================================
-# 목적지 좌표
-# ==========================================
-
-역위도 = float(검색결과[0]["lat"])
-역경도 = float(검색결과[0]["lon"])
+# 첫 번째 검색 결과
+역위도 = float(결과[0]["lat"])
+역경도 = float(결과[0]["lon"])
 
 
-# ==========================================
+# =========================
 # 거리 계산
-# ==========================================
+# =========================
 
 def 거리계산(lat1, lon1, lat2, lon2):
 
@@ -228,63 +211,43 @@ def 거리계산(lat1, lon1, lat2, lon2):
 )
 
 
-# ==========================================
-# 예상 도보 시간
-# ==========================================
-
 도보시간 = max(
     1,
     round(거리 / 75)
 )
 
 
-# ==========================================
+# =========================
 # 길안내
-# ==========================================
+# =========================
 
 st.divider()
 
 st.markdown("## 🧭 이동 순서")
 
 
-st.markdown("""
-<div class="step-box">
+st.markdown(
+    f"""
+<div class="단계">
+<div class="단계제목">1️⃣ 현재 위치에서 역까지</div>
 
-<div class="step-title">
-1️⃣ 현재 위치 → 지하철역
+현재 위치에서 <b>{목적지}역</b>으로 이동하세요.
+
+<br><br>
+
+🚶 거리: 약 <b>{round(거리)}m</b><br>
+⏱ 예상 시간: 약 <b>{도보시간}분</b>
+
 </div>
-
-현재 위치에서 목적지 역으로 이동합니다.
-
-</div>
-""", unsafe_allow_html=True)
-
-
-if 거리 < 1000:
-
-    st.write(
-        f"🚶 거리: 약 **{round(거리)}m**"
-    )
-
-else:
-
-    st.write(
-        f"🚶 거리: 약 **{거리 / 1000:.1f}km**"
-    )
-
-
-st.write(
-    f"⏱ 예상 도보 시간: 약 **{도보시간}분**"
+""",
+    unsafe_allow_html=True
 )
 
 
 st.markdown(
     f"""
-<div class="step-box">
-
-<div class="step-title">
-2️⃣ {목적지}역으로 들어가기
-</div>
+<div class="단계">
+<div class="단계제목">2️⃣ {목적지}역으로 들어가기</div>
 
 {목적지}역에 도착하면 지하철 출입구를 통해 역 안으로 들어갑니다.
 
@@ -296,14 +259,10 @@ st.markdown(
 
 st.markdown(
     """
-<div class="step-box">
+<div class="단계">
+<div class="단계제목">3️⃣ 승강장 찾기</div>
 
-<div class="step-title">
-3️⃣ 지하철 승강장 찾기
-</div>
-
-지하철역 안에서 목적지 방향의 승강장 표지판을 확인합니다.
-
+역 안의 노선 표지판을 확인하고 목적지 방향의 승강장으로 이동하세요.
 </div>
 """,
     unsafe_allow_html=True
@@ -312,14 +271,10 @@ st.markdown(
 
 st.markdown(
     """
-<div class="step-box">
+<div class="단계">
+<div class="단계제목">4️⃣ 지하철 탑승</div>
 
-<div class="step-title">
-4️⃣ 지하철 탑승
-</div>
-
-목적지 방향의 열차를 확인한 후 탑승합니다.
-
+전광판에서 열차의 진행 방향을 확인한 뒤 탑승하세요.
 </div>
 """,
     unsafe_allow_html=True
@@ -328,14 +283,10 @@ st.markdown(
 
 st.markdown(
     f"""
-<div class="step-box">
+<div class="단계">
+<div class="단계제목">5️⃣ {목적지}역에서 하차</div>
 
-<div class="step-title">
-5️⃣ {목적지}역에서 하차
-</div>
-
-{목적지}역에 도착하면 열차에서 내립니다.
-
+{목적지}역에 도착하면 열차에서 내리세요.
 </div>
 """,
     unsafe_allow_html=True
@@ -344,23 +295,19 @@ st.markdown(
 
 st.markdown(
     """
-<div class="step-box">
+<div class="단계">
+<div class="단계제목">6️⃣ 출구로 이동</div>
 
-<div class="step-title">
-6️⃣ 역 밖으로 이동
-</div>
-
-목적지에 가까운 출구를 확인한 후 역 밖으로 나갑니다.
-
+안내 표지판을 확인하고 목적지와 가까운 출구로 나가세요.
 </div>
 """,
     unsafe_allow_html=True
 )
 
 
-# ==========================================
+# =========================
 # 지도
-# ==========================================
+# =========================
 
 st.divider()
 
@@ -369,7 +316,6 @@ st.markdown("## 🗺 지도")
 
 지도 = f"""
 <!DOCTYPE html>
-
 <html>
 
 <head>
@@ -387,7 +333,7 @@ src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">
 
 #map {{
     width: 100%;
-    height: 430px;
+    height: 450px;
     border-radius: 18px;
 }}
 
@@ -405,7 +351,6 @@ var map = L.map("map").setView(
     [{현재위도}, {현재경도}],
     15
 );
-
 
 L.tileLayer(
     "https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png",
@@ -437,75 +382,69 @@ L.polyline(
     {{
         weight: 5
     }}
-)
-.addTo(map);
+).addTo(map);
 
 </script>
 
 </body>
-
 </html>
 """
 
 
 components.html(
     지도,
-    height=450
+    height=470
 )
 
 
-# ==========================================
+# =========================
 # 음성 안내
-# ==========================================
+# =========================
 
 st.divider()
 
 st.markdown("## 🔊 음성 안내")
 
 
-음성내용 = (
+음성 = (
     f"현재 위치에서 {목적지}역으로 이동하세요. "
     f"역까지 약 {round(거리)}미터입니다. "
     f"도보로 약 {도보시간}분 정도 걸립니다. "
     f"{목적지}역에 도착하면 지하철 표지판을 확인하세요. "
-    f"목적지 방향의 열차를 탑승하세요. "
-    f"{목적지}역에서 내리세요."
+    f"목적지 방향의 승강장으로 이동하세요. "
+    f"{목적지}역에서 내린 후 출구로 이동하세요."
 )
 
 
-음성내용 = " ".join(음성내용.split())
-
-
-음성화면 = f"""
+음성코드 = f"""
 <button
-onclick="말하기()"
+onclick="읽기()"
 style="
 width:100%;
 height:55px;
-border:0;
+border:none;
 border-radius:15px;
 font-size:18px;
 font-weight:bold;
 cursor:pointer;
-"
->
+">
 🔊 길안내 듣기
 </button>
 
 <script>
 
-function 말하기() {{
+function 읽기() {{
 
     window.speechSynthesis.cancel();
 
-    const 문장 = new SpeechSynthesisUtterance(
-        {음성내용!r}
+    var 문장 = new SpeechSynthesisUtterance(
+        {음성!r}
     );
 
     문장.lang = "ko-KR";
     문장.rate = 0.9;
-    문장.pitch = 1.0;
-    문장.volume = 1.0;
+    문장.pitch = 1;
+    문장.volume = 1;
 
     window.speechSynthesis.speak(문장);
 }}
@@ -515,6 +454,6 @@ function 말하기() {{
 
 
 components.html(
-    음성화면,
+    음성코드,
     height=70
 )
