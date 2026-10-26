@@ -1,498 +1,355 @@
 
 import streamlit as st
-from datetime import datetime
 from urllib.parse import quote
-import re
 
 st.set_page_config(
     page_title="안심지하철",
     page_icon="🚇",
-    layout="wide",
+    layout="centered",
     initial_sidebar_state="collapsed",
 )
 
-# ---------- 디자인 ----------
+# 상태 저장
+defaults = {
+    "page": "home",
+    "start": "서울역",
+    "destination": "",
+    "transport": "지하철",
+    "guardian": "",
+    "phone": "",
+    "status": "이동 준비",
+}
+
+for key, value in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+# 디자인
 st.markdown("""
 <style>
 .stApp {
-    background: #F4F8FF;
-    color: #17345C;
+    background: #F5F8FE;
 }
 .block-container {
-    max-width: 1100px;
-    padding-top: 1.5rem;
-    padding-bottom: 3rem;
+    max-width: 650px;
+    padding: 1.5rem 1rem 3rem;
 }
 h1, h2, h3 {
-    color: #17345C !important;
+    color: #173B70;
 }
 .hero {
     background: linear-gradient(135deg, #E4F0FF, #FFFFFF);
-    border: 1px solid #D4E5FF;
-    border-radius: 24px;
-    padding: 28px;
+    border: 1px solid #D8E7FF;
+    border-radius: 22px;
+    padding: 24px 20px;
     text-align: center;
+    margin-bottom: 18px;
 }
 .hero-icon {
-    font-size: 64px;
+    font-size: 54px;
 }
-.card {
+.hero-title {
+    font-size: 27px;
+    font-weight: 800;
+    color: #174A91;
+}
+.hero-desc {
+    font-size: 17px;
+    line-height: 1.7;
+    color: #344B68;
+}
+.info-card {
     background: white;
-    border: 1px solid #D9E7FB;
-    border-radius: 18px;
-    padding: 20px;
-    margin: 8px 0;
+    border: 1px solid #DCE7F6;
+    border-radius: 16px;
+    padding: 18px;
+    margin: 10px 0;
 }
-.station {
-    background: white;
-    border: 1px solid #D9E7FB;
-    border-radius: 14px;
-    padding: 13px;
-    margin: 8px 0;
-}
-.small-muted {
-    color: #60748E;
-    font-size: 14px;
-}
-.success-panel {
-    background: #E8FAF3;
-    border: 1px solid #B9ECDD;
-    border-radius: 20px;
+.step {
+    background: #E0ECFF;
+    color: #194D98;
+    border-radius: 30px;
+    padding: 9px;
     text-align: center;
-    padding: 30px 15px;
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 16px;
+}
+.big-success {
+    background: #E5FAF2;
+    border: 1px solid #B8EBD8;
+    border-radius: 22px;
+    text-align: center;
+    padding: 28px 15px;
 }
 .success-icon {
-    font-size: 66px;
+    font-size: 65px;
 }
 div.stButton > button,
 div.stLinkButton > a {
-    border-radius: 14px;
-    min-height: 48px;
-    font-size: 17px;
-    font-weight: 650;
-}
-div[data-testid="stFormSubmitButton"] button {
-    min-height: 48px;
+    min-height: 52px;
     border-radius: 14px;
     font-size: 17px;
+    font-weight: 700;
 }
-[data-testid="stProgressBar"] > div > div {
-    background-color: #4387F5;
+div.stButton > button[kind="primary"] {
+    background: #367CF5;
+    border-color: #367CF5;
+}
+label, .stMarkdown, .stCaption {
+    font-size: 16px;
 }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- 초기 상태 ----------
-if "page" not in st.session_state:
-    st.session_state.page = 0
-if "trip" not in st.session_state:
-    st.session_state.trip = None
-if "history" not in st.session_state:
-    st.session_state.history = []
-if "start_time" not in st.session_state:
-    st.session_state.start_time = ""
-if "arrival_time" not in st.session_state:
-    st.session_state.arrival_time = ""
-if "notice" not in st.session_state:
-    st.session_state.notice = ""
-if "selected_destination" not in st.session_state:
-    st.session_state.selected_destination = "강남역"
 
-pages = [
-    "메인 화면",
-    "목적지 설정",
-    "탑승 중",
-    "도착 완료",
-    "보호자 알림",
-]
-
-destinations = [
-    "강남역",
-    "서울역",
-    "잠실역",
-    "홍대입구역",
-    "종로3가역",
-    "병원",
-    "기타",
-]
+def go(page):
+    st.session_state.page = page
 
 
-def record(text):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    st.session_state.history.insert(0, f"{now} · {text}")
-
-
-def create_notice(kind):
-    trip = st.session_state.trip
-    if not trip:
-        return ""
-
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-    if kind == "도착":
-        detail = f"목적지 {trip['destination']}에 도착했습니다."
-        heading = "[안심지하철 도착 알림]"
-    elif kind == "도움":
-        detail = (
-            f"{trip['destination']}으로 이동 중 도움이 필요합니다. "
-            "전화로 확인해 주세요."
-        )
-        heading = "[안심지하철 도움 요청]"
-    else:
-        detail = f"{trip['destination']}으로 이동을 시작했습니다."
-        heading = "[안심지하철 이동 알림]"
-
-    return (
-        f"{heading}\n"
-        f"이용자: {trip['name']}\n"
-        f"보호자: {trip['guardian'] or '미입력'}\n"
-        f"내용: {detail}\n"
-        f"이동 수단: 지하철\n"
-        f"확인 시간: {now}\n"
-        "※ 버튼을 누른 시각이며 GPS로 확인한 위치가 아닙니다."
+def header(step, title):
+    st.markdown(
+        f'<div class="step">{step}</div>',
+        unsafe_allow_html=True
     )
+    st.title(title)
 
 
-def change_page(number):
-    st.session_state.page = number
-
-
-# ---------- 상단 제목 ----------
-st.markdown(
-    "<div style='text-align:center;font-size:15px;color:#54739C'>"
-    "어르신의 안전한 지하철 이용 도우미</div>",
-    unsafe_allow_html=True,
-)
-st.title("🚇 안심지하철")
-st.caption("목적지에 도착하면 보호자에게 알릴 수 있어요.")
-
-# ---------- 5단계 메뉴 ----------
-selected_page = st.radio(
-    "앱 화면",
-    pages,
-    index=st.session_state.page,
-    horizontal=True,
-    label_visibility="collapsed",
-    key="page_selector",
-)
-st.session_state.page = pages.index(selected_page)
-
-st.progress((st.session_state.page + 1) / len(pages))
-st.caption(f"{st.session_state.page + 1} / 5 단계")
-
-st.divider()
-
-# ---------- 1. 메인 화면 ----------
-if st.session_state.page == 0:
+# 1. 메인 화면
+if st.session_state.page == "home":
     st.markdown("""
     <div class="hero">
         <div class="hero-icon">🚇</div>
-        <h2>안심지하철</h2>
-        <p>노약자의 안전한 지하철 이용,<br>
-        가족과 함께 안심하고 이동하세요.</p>
+        <div class="hero-title">안심지하철</div>
+        <div class="hero-desc">
+            대중교통 이용이 어려운 어르신도<br>
+            목적지까지 안심하고 이동하세요.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="info-card">
+        <b>👣 간편한 이용 방법</b><br><br>
+        ① 목적지를 선택해요.<br>
+        ② 이동 상태를 확인해요.<br>
+        ③ 도착하면 보호자에게 알려요.
+    </div>
+    """, unsafe_allow_html=True)
+
+    if st.button("🚇 지하철 타기 시작", type="primary",
+                 use_container_width=True):
+        go("destination")
+        st.rerun()
+
+    if st.button("👨‍👩‍👧 보호자 정보 설정",
+                 use_container_width=True):
+        go("guardian")
+        st.rerun()
+
+
+# 2. 목적지 설정
+elif st.session_state.page == "destination":
+    header("2단계 · 목적지 설정", "어디까지 가시나요?")
+
+    with st.form("route_form"):
+        start = st.text_input(
+            "출발역",
+            value=st.session_state.start
+        )
+        destination = st.text_input(
+            "도착역",
+            value=st.session_state.destination,
+            placeholder="예: 강남역"
+        )
+        transport = st.selectbox(
+            "이용할 교통수단",
+            ["지하철", "버스", "지하철 + 버스"],
+            index=[
+                "지하철", "버스", "지하철 + 버스"
+            ].index(st.session_state.transport)
+        )
+        save = st.form_submit_button(
+            "목적지 선택 완료",
+            type="primary",
+            use_container_width=True
+        )
+
+    if save:
+        if not start.strip() or not destination.strip():
+            st.error("출발역과 도착역을 입력해 주세요.")
+        elif start.strip() == destination.strip():
+            st.error("출발역과 도착역이 같아요. 다시 확인해 주세요.")
+        else:
+            st.session_state.start = start.strip()
+            st.session_state.destination = destination.strip()
+            st.session_state.transport = transport
+            st.session_state.status = "이동 준비"
+            go("riding")
+            st.rerun()
+
+    st.caption("※ 이 버전은 역 이름을 입력받으며 실제 노선 검색 기능은 포함하지 않아요.")
+
+    if st.button("← 메인 화면", use_container_width=True):
+        go("home")
+        st.rerun()
+
+
+# 3. 탑승 및 이동 상태
+elif st.session_state.page == "riding":
+    header("3단계 · 이동 중", "안전하게 이동하세요")
+
+    st.markdown(f"""
+    <div class="info-card">
+        <div style="color:#60758F">🚉 출발역</div>
+        <h3>{st.session_state.start}</h3>
+        <div style="font-size:26px;color:#367CF5">↓</div>
+        <div style="color:#60758F">📍 도착역</div>
+        <h3>{st.session_state.destination}</h3>
+        <hr>
+        <b>교통수단:</b> {st.session_state.transport}
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.info("현재 위치는 자동으로 추적되지 않아요. 실제 상황에 맞게 아래 버튼을 눌러 주세요.")
+
+    if st.button("🚆 이동 중이에요", type="primary",
+                 use_container_width=True):
+        st.session_state.status = "이동 중"
+        st.success("이동 상태가 업데이트되었어요.")
+
+    if st.button("✅ 목적지에 도착했어요",
+                 use_container_width=True):
+        st.session_state.status = "목적지 도착"
+        go("arrived")
+        st.rerun()
+
+    if st.button("← 목적지 다시 설정",
+                 use_container_width=True):
+        go("destination")
+        st.rerun()
+
+
+# 4. 도착 완료
+elif st.session_state.page == "arrived":
+    header("4단계 · 도착 완료", "목적지에 도착했어요!")
+
+    st.markdown("""
+    <div class="big-success">
+        <div class="success-icon">✅</div>
+        <h2>안전하게 도착하셨나요?</h2>
+        <p>도착 확인이 완료되면<br>
+        보호자에게 알림을 보낼 수 있어요.</p>
     </div>
     """, unsafe_allow_html=True)
 
     st.write("")
-    st.subheader("어디로 이동하시나요?")
+    st.markdown(
+        f"**도착역:** {st.session_state.destination}"
+    )
 
-    if st.session_state.trip:
-        st.markdown(
-            f"""<div class="card">
-            📍 최근 목적지<br><br>
-            <strong>{st.session_state.trip['destination']}</strong>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            """<div class="card">
-            👋 안녕하세요!<br><br>
-            목적지를 선택하고 안전한 이동을 시작해 보세요.
-            </div>""",
-            unsafe_allow_html=True,
-        )
-
-    if st.button("🚇 지하철 타기  →", type="primary",
-                 use_container_width=True):
-        change_page(1)
+    if st.button("📨 보호자에게 도착 알리기",
+                 type="primary", use_container_width=True):
+        go("notify")
         st.rerun()
 
-    st.subheader("이용 안내")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown("### 📍")
-        st.write("목적지 설정")
-    with col2:
-        st.markdown("### 🚇")
-        st.write("이동 상태 확인")
-    with col3:
-        st.markdown("### 🔔")
-        st.write("보호자 알림")
+    if st.button("← 이동 화면으로",
+                 use_container_width=True):
+        go("riding")
+        st.rerun()
 
-# ---------- 2. 목적지 설정 ----------
-elif st.session_state.page == 1:
-    st.header("📍 목적지 설정")
-    st.write("도착할 역을 선택해 주세요.")
 
-    with st.form("destination_form"):
-        name = st.text_input(
-            "어르신 성함",
-            value=st.session_state.trip["name"]
-            if st.session_state.trip else "",
-            max_chars=40,
-        )
+# 보호자 정보 설정
+elif st.session_state.page == "guardian":
+    header("보호자 설정", "보호자 정보를 입력하세요")
+
+    with st.form("guardian_form"):
         guardian = st.text_input(
-            "보호자 성함",
-            value=st.session_state.trip["guardian"]
-            if st.session_state.trip else "",
-            max_chars=40,
+            "보호자 이름",
+            value=st.session_state.guardian,
+            placeholder="예: 아들"
         )
         phone = st.text_input(
-            "보호자 전화번호",
-            value=st.session_state.trip["phone"]
-            if st.session_state.trip else "",
-            placeholder="01012345678",
-            max_chars=20,
+            "보호자 휴대전화 번호",
+            value=st.session_state.phone,
+            placeholder="예: 01012345678"
         )
-        origin = st.text_input(
-            "출발역",
-            value=st.session_state.trip["origin"]
-            if st.session_state.trip else "",
-            placeholder="예: 서울역",
-        )
-        destination = st.selectbox(
-            "도착역",
-            destinations,
-            index=destinations.index(
-                st.session_state.selected_destination
-            ),
-        )
-        if destination == "기타":
-            custom_destination = st.text_input(
-                "목적지 직접 입력",
-                placeholder="역 또는 장소 이름",
-            )
-        else:
-            custom_destination = ""
-
-        submitted = st.form_submit_button(
-            "선택 완료 →",
+        save_guardian = st.form_submit_button(
+            "보호자 정보 저장",
             type="primary",
-            use_container_width=True,
+            use_container_width=True
         )
 
-        if submitted:
-            final_destination = (
-                custom_destination.strip()
-                if destination == "기타"
-                else destination
-            )
-            digits = re.sub(r"\D", "", phone)
+    if save_guardian:
+        digits = "".join(c for c in phone if c.isdigit())
 
-            if not name.strip() or not final_destination:
-                st.error("성함과 목적지를 입력해 주세요.")
-            elif phone.strip() and not 8 <= len(digits) <= 15:
-                st.error("보호자 전화번호를 확인해 주세요.")
-            else:
-                st.session_state.trip = {
-                    "name": name.strip(),
-                    "guardian": guardian.strip(),
-                    "phone": phone.strip(),
-                    "origin": origin.strip() or "출발역 미입력",
-                    "destination": final_destination,
-                }
-                st.session_state.selected_destination = destination
-                st.session_state.start_time = ""
-                st.session_state.arrival_time = ""
-                st.session_state.notice = ""
-                record(f"목적지 설정: {final_destination}")
-                change_page(2)
-                st.rerun()
-
-    st.info("보호자 전화번호는 문자 앱을 열 때 사용합니다.")
-
-# ---------- 3. 탑승 중 ----------
-elif st.session_state.page == 2:
-    st.header("🚇 이동 중")
-
-    if not st.session_state.trip:
-        st.warning("먼저 목적지를 설정해 주세요.")
-        if st.button("목적지 설정으로 이동"):
-            change_page(1)
-            st.rerun()
-    else:
-        trip = st.session_state.trip
-        st.markdown(
-            f"""<div class="card">
-            <span style="color:#4387F5;font-weight:bold">● 이동 경로</span>
-            <h3>🚉 {trip['origin']}</h3>
-            <p style="color:#4387F5">│</p>
-            <p>🔵 현재 상태: { 
-                '이동 중' if st.session_state.start_time
-                else '탑승 준비'
-            }</p>
-            <p style="color:#4387F5">│</p>
-            <h3>○ {trip['destination']}</h3>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-
-        if st.session_state.start_time:
-            st.success(
-                f"이동 시작 시간: {st.session_state.start_time}"
-            )
-            st.info(
-                "안전하게 이동하세요. 실제 현재 위치와 "
-                "열차 위치를 추적하는 기능은 포함되어 있지 않습니다."
-            )
+        if not guardian.strip():
+            st.error("보호자 이름을 입력해 주세요.")
+        elif not digits or len(digits) < 9 or len(digits) > 15:
+            st.error("휴대전화 번호를 확인해 주세요.")
         else:
-            st.write("이동을 시작하면 시작 시간이 기록됩니다.")
-            if st.button("🚇 지금 이동 시작", type="primary",
-                         use_container_width=True):
-                st.session_state.start_time = datetime.now().strftime(
-                    "%Y-%m-%d %H:%M"
-                )
-                st.session_state.notice = create_notice("이동")
-                record("이동 시작")
-                st.rerun()
+            st.session_state.guardian = guardian.strip()
+            st.session_state.phone = phone.strip()
+            st.success("보호자 정보가 저장되었어요.")
 
-        if st.button("✅ 목적지에 도착했어요",
-                     type="primary", use_container_width=True):
-            if not st.session_state.start_time:
-                st.warning("먼저 이동 시작 버튼을 눌러 주세요.")
-            else:
-                st.session_state.arrival_time = datetime.now().strftime(
-                    "%Y-%m-%d %H:%M"
-                )
-                st.session_state.notice = create_notice("도착")
-                record(f"{trip['destination']} 도착 확인")
-                change_page(3)
-                st.rerun()
+    if st.button("← 메인 화면", use_container_width=True):
+        go("home")
+        st.rerun()
 
-        if st.button("🆘 도움이 필요해요",
-                     use_container_width=True):
-            st.session_state.notice = create_notice("도움")
-            record("도움 요청")
-            change_page(4)
-            st.rerun()
 
-# ---------- 4. 도착 완료 ----------
-elif st.session_state.page == 3:
-    st.header("도착 확인")
+# 5. 보호자 알림
+elif st.session_state.page == "notify":
+    header("5단계 · 보호자 알림", "도착 소식을 전해요")
 
-    if not st.session_state.trip:
-        st.warning("먼저 목적지를 설정해 주세요.")
-        if st.button("목적지 설정"):
-            change_page(1)
-            st.rerun()
-    elif not st.session_state.arrival_time:
-        st.info("이동 중 화면에서 도착 버튼을 눌러 주세요.")
-        if st.button("이동 중 화면으로"):
-            change_page(2)
-            st.rerun()
-    else:
-        trip = st.session_state.trip
-        st.markdown(f"""
-        <div class="success-panel">
-            <div class="success-icon">✅</div>
-            <h2>목적지에 도착했어요!</h2>
-            <p><strong>{trip['destination']}</strong></p>
-            <p>안전하게 이동하셨습니다.</p>
-            <p>보호자에게 알림을 보낼 수 있어요.</p>
-        </div>
-        """, unsafe_allow_html=True)
+    destination = st.session_state.destination
+    guardian = st.session_state.guardian or "보호자"
 
-        st.write("")
-        st.markdown(
-            f"""<div class="card">
-            👤 이용자: {trip['name']}<br><br>
-            🕒 도착 확인: {st.session_state.arrival_time}<br><br>
-            🔔 보호자: {trip['guardian'] or '미입력'}
-            </div>""",
-            unsafe_allow_html=True,
+    message = (
+        f"[안심지하철] {destination}에 도착했습니다. "
+        "안심하세요!"
+    )
+
+    st.markdown("""
+    <div class="big-success">
+        <div class="success-icon">📱</div>
+        <h2>도착 알림 준비 완료</h2>
+        <p>아래 내용을 확인하고 보호자에게 알려 주세요.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.write("")
+    st.write(f"**받는 분:** {guardian}")
+    st.text_area("전송할 메시지", value=message, disabled=True)
+
+    digits = "".join(
+        c for c in st.session_state.phone if c.isdigit()
+    )
+
+    if digits:
+        sms_url = f"sms:{digits}?body={quote(message)}"
+        st.link_button(
+            "💬 문자 앱 열기",
+            sms_url,
+            use_container_width=True
         )
-
+        st.caption("문자 앱에서 직접 전송 버튼을 눌러야 알림이 전달돼요.")
+    else:
         st.warning(
-            "도착은 버튼을 누른 것으로 기록됩니다. "
-            "GPS가 자동으로 도착을 확인한 것은 아닙니다."
+            "보호자 연락처가 등록되지 않았어요. "
+            "메시지를 복사해 직접 전달하거나 보호자 정보를 설정해 주세요."
         )
 
-        if st.button("🔔 보호자에게 알리기 →",
-                     type="primary", use_container_width=True):
-            st.session_state.notice = create_notice("도착")
-            change_page(4)
+        if st.button("보호자 정보 설정",
+                     use_container_width=True):
+            go("guardian")
             st.rerun()
 
-# ---------- 5. 보호자 알림 ----------
-elif st.session_state.page == 4:
-    st.header("🔔 보호자 알림")
-
-    if not st.session_state.trip:
-        st.warning("먼저 목적지를 설정해 주세요.")
-        if st.button("목적지 설정으로"):
-            change_page(1)
-            st.rerun()
-    else:
-        trip = st.session_state.trip
-
-        if not st.session_state.notice:
-            st.session_state.notice = create_notice(
-                "도움" if st.session_state.history
-                and "도움 요청" in st.session_state.history[0]
-                else "도착"
-            )
-
-        st.markdown(
-            """<div class="card">
-            <h3>📱 보호자에게 전달할 메시지</h3>
-            내용을 확인한 뒤 문자 앱에서 전송해 주세요.
-            </div>""",
-            unsafe_allow_html=True,
-        )
-
-        st.text_area(
-            "알림 내용",
-            value=st.session_state.notice,
-            height=220,
-            key="notice_preview",
-        )
-
-        phone = re.sub(r"\s+", "", trip["phone"])
-        if phone:
-            sms_url = (
-                f"sms:{quote(phone, safe='+')}"
-                f"?body={quote(st.session_state.notice)}"
-            )
-            st.link_button(
-                "📨 문자 앱 열기",
-                sms_url,
-                use_container_width=True,
-            )
-        else:
-            st.warning(
-                "보호자 전화번호가 등록되지 않았어요. "
-                "문자 앱을 열려면 목적지 설정에서 번호를 입력해 주세요."
-            )
-
-        st.info(
-            "문자 앱이 열려도 자동 전송되지는 않습니다. "
-            "문자 내용을 확인하고 직접 보내 주세요."
-        )
-
-        st.subheader("최근 이동 기록")
-        if st.session_state.history:
-            for item in st.session_state.history[:10]:
-                st.write("• " + item)
-        else:
-            st.write("기록이 없습니다.")
-
-        if st.button("🏠 처음 화면으로",
-                     type="primary", use_container_width=True):
-            change_page(0)
-            st.rerun()
+    if st.button("🏠 처음 화면으로",
+                 type="primary", use_container_width=True):
+        go("home")
+        st.rerun()
 
 st.divider()
 st.caption(
-    "안심지하철 | 이동을 돕는 시범 앱 · 실제 GPS 추적 및 자동 문자 발송 미지원"
+    "안심지하철 | 현재 버전은 실제 GPS 추적 및 자동 문자 발송을 지원하지 않습니다."
 )
