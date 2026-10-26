@@ -7,97 +7,136 @@ import streamlit.components.v1 as components
 
 
 # =========================================================
-# 기본 설정
+# 앱 기본 설정
 # =========================================================
+
 st.set_page_config(
-    page_title="Seoul WayFinder",
+    page_title="서울 길찾기",
     page_icon="🧭",
     layout="wide",
 )
 
-NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
-OSRM_URL = "https://router.project-osrm.org/route/v1/foot"
 
-HEADERS = {
-    "User-Agent": "Seoul-WayFinder-Streamlit/1.0"
+# =========================================================
+# 외부 서비스 주소
+# =========================================================
+
+장소검색주소 = "https://nominatim.openstreetmap.org/search"
+경로검색주소 = "https://router.project-osrm.org/route/v1/foot"
+
+요청헤더 = {
+    "User-Agent": "Seoul-WayFinder-Streamlit"
 }
 
 
 # =========================================================
-# 디자인
+# 화면 디자인
 # =========================================================
+
 st.markdown(
     """
     <style>
+
     .stApp {
-        background: #f6f7fb;
+        background: #f5f7fb;
     }
 
-    .hero {
-        background: linear-gradient(135deg, #4f46e5, #7c3aed);
+    .상단 {
+        background: linear-gradient(
+            135deg,
+            #4f46e5,
+            #7c3aed
+        );
+
         color: white;
+
         border-radius: 24px;
+
         padding: 30px;
-        margin-bottom: 20px;
-        box-shadow: 0 12px 30px rgba(79,70,229,.18);
+
+        margin-bottom: 22px;
+
+        box-shadow:
+            0 12px 30px
+            rgba(79, 70, 229, 0.18);
     }
 
-    .hero h1 {
+    .상단 h1 {
         margin: 0 0 8px 0;
-        font-size: 2.1rem;
+        font-size: 2.2rem;
     }
 
-    .hero p {
+    .상단 p {
         margin: 0;
-        opacity: .92;
+        opacity: 0.92;
+        font-size: 1rem;
     }
 
-    .card {
+    .카드 {
         background: white;
+
         border-radius: 20px;
+
         padding: 22px;
+
         border: 1px solid #e8eaf1;
-        box-shadow: 0 7px 22px rgba(20,20,50,.05);
+
+        box-shadow:
+            0 7px 22px
+            rgba(20, 20, 50, 0.05);
+
         margin-bottom: 16px;
     }
 
-    .route-card {
+    .경로카드 {
         border-left: 6px solid #6366f1;
     }
 
-    .big-number {
+    .큰숫자 {
         font-size: 1.6rem;
+
         font-weight: 800;
+
         color: #4338ca;
     }
 
-    .muted {
+    .설명 {
         color: #6b7280;
-        font-size: .9rem;
+
+        font-size: 0.9rem;
     }
 
-    .step {
+    .단계 {
         display: flex;
+
         gap: 12px;
+
         padding: 13px 0;
-        border-bottom: 1px solid #eeeef4;
+
+        border-bottom:
+            1px solid #eeeeF4;
     }
 
-    .step:last-child {
-        border-bottom: none;
-    }
-
-    .step-no {
+    .단계번호 {
         min-width: 30px;
+
         height: 30px;
+
         border-radius: 50%;
+
         background: #eef2ff;
+
         color: #4338ca;
+
         display: flex;
+
         align-items: center;
+
         justify-content: center;
+
         font-weight: 800;
     }
+
     </style>
     """,
     unsafe_allow_html=True,
@@ -105,41 +144,53 @@ st.markdown(
 
 
 # =========================================================
-# API - 장소 검색
+# 장소 찾기
 # =========================================================
-@st.cache_data(ttl=3600, show_spinner=False)
-def geocode(place):
-    place = place.strip()
 
-    if not place:
+@st.cache_data(
+    ttl=3600,
+    show_spinner=False
+)
+def 장소찾기(장소):
+
+    장소 = 장소.strip()
+
+    if not 장소:
         return None
 
     try:
-        response = requests.get(
-            NOMINATIM_URL,
+
+        응답 = requests.get(
+            장소검색주소,
+
             params={
-                "q": f"{place}, 대한민국",
+                "q": f"{장소}, 대한민국",
                 "format": "jsonv2",
                 "limit": 1,
                 "countrycodes": "kr",
             },
-            headers=HEADERS,
+
+            headers=요청헤더,
+
             timeout=10,
         )
 
-        response.raise_for_status()
+        응답.raise_for_status()
 
-        data = response.json()
+        결과 = 응답.json()
 
-        if not data:
+        if not 결과:
             return None
 
-        item = data[0]
+        정보 = 결과[0]
 
         return {
-            "lat": float(item["lat"]),
-            "lon": float(item["lon"]),
-            "display_name": item.get("display_name", place),
+            "위도": float(정보["lat"]),
+            "경도": float(정보["lon"]),
+            "이름": 정보.get(
+                "display_name",
+                장소
+            ),
         }
 
     except (
@@ -148,50 +199,78 @@ def geocode(place):
         KeyError,
         IndexError,
     ):
+
         return None
 
 
 # =========================================================
-# API - 경로 검색
+# 이동 경로 찾기
 # =========================================================
-@st.cache_data(ttl=300, show_spinner=False)
-def get_route(start_lat, start_lon, end_lat, end_lon):
 
-    url = (
-        f"{OSRM_URL}/"
-        f"{start_lon},{start_lat};"
-        f"{end_lon},{end_lat}"
+@st.cache_data(
+    ttl=300,
+    show_spinner=False
+)
+def 이동경로찾기(
+    출발위도,
+    출발경도,
+    도착위도,
+    도착경도,
+):
+
+    주소 = (
+        f"{경로검색주소}/"
+        f"{출발경도},{출발위도};"
+        f"{도착경도},{도착위도}"
     )
 
     try:
-        response = requests.get(
-            url,
+
+        응답 = requests.get(
+            주소,
+
             params={
                 "overview": "full",
                 "geometries": "geojson",
                 "steps": "true",
             },
-            headers=HEADERS,
+
+            headers=요청헤더,
+
             timeout=15,
         )
 
-        response.raise_for_status()
+        응답.raise_for_status()
 
-        data = response.json()
+        결과 = 응답.json()
 
-        if data.get("code") != "Ok":
+        if 결과.get("code") != "Ok":
             return None
 
-        if not data.get("routes"):
+        if not 결과.get("routes"):
             return None
 
-        route = data["routes"][0]
+        경로 = 결과["routes"][0]
 
         return {
-            "distance_m": route.get("distance", 0),
-            "duration_s": route.get("duration", 0),
-            "geometry": route["geometry"]["coordinates"],
-            "legs": route.get("legs", []),
+            "거리": 경로.get(
+                "distance",
+                0
+            ),
+
+            "시간": 경로.get(
+                "duration",
+                0
+            ),
+
+            "지도경로": 경로[
+                "geometry"
+            ]["coordinates"],
+
+            "구간": 경로.get(
+                "legs",
+                []
+            ),
         }
 
     except (
@@ -200,183 +279,242 @@ def get_route(start_lat, start_lon, end_lat, end_lon):
         KeyError,
         IndexError,
     ):
+
         return None
 
 
 # =========================================================
-# 거리 / 시간 표시
+# 거리 표시
 # =========================================================
-def format_distance(meters):
 
-    if meters < 1000:
-        return f"{round(meters)}m"
+def 거리표시(미터):
 
-    return f"{meters / 1000:.1f}km"
+    if 미터 < 1000:
 
+        return f"{round(미터)}m"
 
-def format_duration(seconds):
-
-    minutes = max(1, round(seconds / 60))
-
-    if minutes < 60:
-        return f"{minutes}분"
-
-    hours = minutes // 60
-    rest = minutes % 60
-
-    if rest == 0:
-        return f"{hours}시간"
-
-    return f"{hours}시간 {rest}분"
+    return f"{미터 / 1000:.1f}km"
 
 
 # =========================================================
-# 방향 안내
+# 시간 표시
 # =========================================================
-def direction_text(modifier, road_name):
 
-    road = road_name.strip() if road_name else "도로"
+def 시간표시(초):
 
-    directions = {
-        "left": "왼쪽으로",
-        "right": "오른쪽으로",
-        "slight left": "왼쪽 방향으로",
-        "slight right": "오른쪽 방향으로",
-        "sharp left": "왼쪽으로 크게",
-        "sharp right": "오른쪽으로 크게",
-        "straight": "직진하여",
-        "uturn": "유턴하여",
+    분 = max(
+        1,
+        round(초 / 60)
+    )
+
+    if 분 < 60:
+
+        return f"{분}분"
+
+    시간 = 분 // 60
+
+    나머지 = 분 % 60
+
+    if 나머지 == 0:
+
+        return f"{시간}시간"
+
+    return (
+        f"{시간}시간 "
+        f"{나머지}분"
+    )
+
+
+# =========================================================
+# 방향 한글화
+# =========================================================
+
+def 방향표시(
+    방향,
+    도로이름
+):
+
+    도로 = (
+        도로이름.strip()
+        if 도로이름
+        else "도로"
+    )
+
+    방향표 = {
+
+        "left":
+            "왼쪽으로",
+
+        "right":
+            "오른쪽으로",
+
+        "slight left":
+            "왼쪽 방향으로",
+
+        "slight right":
+            "오른쪽 방향으로",
+
+        "sharp left":
+            "왼쪽으로 크게",
+
+        "sharp right":
+            "오른쪽으로 크게",
+
+        "straight":
+            "직진하여",
+
+        "uturn":
+            "유턴하여",
     }
 
-    direction = directions.get(
-        modifier,
+    표시방향 = 방향표.get(
+        방향,
         "이동하여"
     )
 
-    return f"{direction} {road}"
+    return (
+        f"{표시방향} "
+        f"{도로}"
+    )
 
 
 # =========================================================
-# 이동 단계 만들기
+# 이동 안내 만들기
 # =========================================================
-def make_steps(route):
 
-    result = []
+def 이동안내만들기(경로):
 
-    for leg in route.get("legs", []):
+    안내 = []
 
-        for step in leg.get("steps", []):
+    for 구간 in 경로.get(
+        "구간",
+        []
+    ):
 
-            maneuver = step.get("maneuver", {})
+        for 단계 in 구간.get(
+            "steps",
+            []
+        ):
 
-            modifier = maneuver.get(
+            이동방법 = 단계.get(
+                "maneuver",
+                {}
+            )
+
+            방향 = 이동방법.get(
                 "modifier",
                 "straight"
             )
 
-            name = step.get("name", "")
+            도로 = 단계.get(
+                "name",
+                ""
+            )
 
-            distance = step.get(
+            거리 = 단계.get(
                 "distance",
                 0
             )
 
-            if distance < 15:
+            if 거리 < 15:
                 continue
 
-            result.append(
+            안내.append(
                 {
-                    "text": direction_text(
-                        modifier,
-                        name
-                    ),
-                    "distance": distance,
+                    "내용":
+                        방향표시(
+                            방향,
+                            도로
+                        ),
+
+                    "거리":
+                        거리,
                 }
             )
 
-    return result[:12]
+    return 안내[:12]
 
 
 # =========================================================
-# 음성 안내 문장
+# 음성 안내 문장 만들기
 # =========================================================
-def make_voice_text(
-    origin_name,
-    destination_name,
-    route,
-    steps,
+
+def 음성문장만들기(
+    출발지,
+    도착지,
+    경로,
+    안내,
 ):
 
-    text = []
+    문장 = []
 
-    text.append(
-        f"{origin_name}에서 "
-        f"{destination_name}까지 "
+    문장.append(
+        f"{출발지}에서 "
+        f"{도착지}까지 "
         f"안내를 시작합니다."
     )
 
-    text.append(
-        f"예상 거리는 "
-        f"{format_distance(route['distance_m'])}, "
-        f"예상 시간은 약 "
-        f"{format_duration(route['duration_s'])}입니다."
+    문장.append(
+        f"총 거리는 "
+        f"{거리표시(경로['거리'])}이고, "
+        f"예상 시간은 "
+        f"{시간표시(경로['시간'])}입니다."
     )
 
-    for i, step in enumerate(
-        steps[:8],
+    for 번호, 단계 in enumerate(
+        안내[:8],
         start=1
     ):
 
-        text.append(
-            f"{i}번째 안내입니다. "
-            f"{step['text']}, "
-            f"{format_distance(step['distance'])} "
+        문장.append(
+            f"{번호}번째 안내입니다. "
+            f"{단계['내용']}, "
+            f"{거리표시(단계['거리'])} "
             f"이동하세요."
         )
 
-    text.append(
+    문장.append(
         "목적지에 도착하면 "
-        "안내가 끝납니다."
+        "안내가 종료됩니다."
     )
 
-    return " ".join(text)
+    return " ".join(문장)
 
 
 # =========================================================
 # 지도 만들기
 # =========================================================
-def make_map(
-    origin,
-    destination,
-    route,
+
+def 지도만들기(
+    출발지,
+    도착지,
+    경로,
 ):
 
-    route_coords = route["geometry"]
+    좌표 = 경로["지도경로"]
 
-    # OSRM은 [경도, 위도]
-    # Leaflet은 [위도, 경도]
-    leaflet_route = [
-        [lat, lon]
-        for lon, lat in route_coords
+    지도좌표 = [
+        [위도, 경도]
+        for 경도, 위도 in 좌표
     ]
 
-    route_json = json.dumps(
-        leaflet_route,
-        ensure_ascii=False,
+    지도좌표JSON = json.dumps(
+        지도좌표,
+        ensure_ascii=False
     )
 
-    origin_lat = origin["lat"]
-    origin_lon = origin["lon"]
+    출발위도 = 출발지["위도"]
+    출발경도 = 출발지["경도"]
 
-    destination_lat = destination["lat"]
-    destination_lon = destination["lon"]
+    도착위도 = 도착지["위도"]
+    도착경도 = 도착지["경도"]
 
-    origin_label = html.escape(
-        origin["display_name"][:100]
+    출발이름 = html.escape(
+        출발지["이름"][:100]
     )
 
-    destination_label = html.escape(
-        destination["display_name"][:100]
+    도착이름 = html.escape(
+        도착지["이름"][:100]
     )
 
     return f"""
@@ -410,7 +548,9 @@ def make_map(
 
     #map {{
         min-height: 540px;
+
         border-radius: 18px;
+
         overflow: hidden;
     }}
 
@@ -422,138 +562,178 @@ def make_map(
 
     <div id="map"></div>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">
+    <script
+        src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">
     </script>
 
     <script>
 
-    const origin = [
-        {origin_lat},
-        {origin_lon}
+    const 출발지 = [
+        {출발위도},
+        {출발경도}
     ];
 
-    const destination = [
-        {destination_lat},
-        {destination_lon}
+    const 도착지 = [
+        {도착위도},
+        {도착경도}
     ];
 
-    const route = {route_json};
+    const 경로 = {지도좌표JSON};
 
-    const map = L.map("map").setView(
-        origin,
+
+    const 지도 = L.map(
+        "map"
+    ).setView(
+        출발지,
         14
     );
+
 
     L.tileLayer(
         "https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png",
         {{
+
             maxZoom: 19,
+
             attribution:
-                "&copy; OpenStreetMap contributors"
+                "&copy; OpenStreetMap 기여자"
+
         }}
-    ).addTo(map);
+    ).addTo(지도);
 
 
-    // 출발지 아이콘
-    const originIcon = L.divIcon({{
-        className: "",
+    // 출발지
+    const 출발아이콘 =
+        L.divIcon({{
 
-        html:
-            '<div style="' +
-            'width:18px;' +
-            'height:18px;' +
-            'border-radius:50%;' +
-            'background:#4f46e5;' +
-            'border:4px solid white;' +
-            'box-shadow:0 2px 8px #555;' +
-            '"></div>',
+            className: "",
 
-        iconSize: [26, 26],
+            html:
+                '<div style="' +
+                'width:18px;' +
+                'height:18px;' +
+                'border-radius:50%;' +
+                'background:#4f46e5;' +
+                'border:4px solid white;' +
+                'box-shadow:0 2px 8px #555;' +
+                '"></div>',
 
-        iconAnchor: [13, 13]
-    }});
+            iconSize: [
+                26,
+                26
+            ],
+
+            iconAnchor: [
+                13,
+                13
+            ]
+
+        }});
 
 
-    // 도착지 아이콘
-    const destinationIcon = L.divIcon({{
-        className: "",
+    // 도착지
+    const 도착아이콘 =
+        L.divIcon({{
 
-        html:
-            '<div style="' +
-            'width:18px;' +
-            'height:18px;' +
-            'border-radius:50%;' +
-            'background:#ef4444;' +
-            'border:4px solid white;' +
-            'box-shadow:0 2px 8px #555;' +
-            '"></div>',
+            className: "",
 
-        iconSize: [26, 26],
+            html:
+                '<div style="' +
+                'width:18px;' +
+                'height:18px;' +
+                'border-radius:50%;' +
+                'background:#ef4444;' +
+                'border:4px solid white;' +
+                'box-shadow:0 2px 8px #555;' +
+                '"></div>',
 
-        iconAnchor: [13, 13]
-    }});
+            iconSize: [
+                26,
+                26
+            ],
+
+            iconAnchor: [
+                13,
+                13
+            ]
+
+        }});
 
 
     L.marker(
-        origin,
+        출발지,
         {{
-            icon: originIcon
+            icon: 출발아이콘
         }}
     )
-    .addTo(map)
+    .addTo(지도)
     .bindPopup(
-        "<b>출발지</b><br>{origin_label}"
+        "<b>출발지</b><br>"
+        + `{출발이름}`
     );
 
 
     L.marker(
-        destination,
+        도착지,
         {{
-            icon: destinationIcon
+            icon: 도착아이콘
         }}
     )
-    .addTo(map)
+    .addTo(지도)
     .bindPopup(
-        "<b>도착지</b><br>{destination_label}"
+        "<b>도착지</b><br>"
+        + `{도착이름}`
     );
 
 
-    const line = L.polyline(
-        route,
-        {{
-            color: "#6366f1",
-            weight: 6,
-            opacity: 0.85
-        }}
-    ).addTo(map);
+    const 이동선 =
+        L.polyline(
+            경로,
+            {{
+
+                color: "#6366f1",
+
+                weight: 6,
+
+                opacity: 0.85
+
+            }}
+        ).addTo(지도);
 
 
-    map.fitBounds(
-        line.getBounds(),
+    지도.fitBounds(
+        이동선.getBounds(),
         {{
-            padding: [30, 30]
+            padding: [
+                30,
+                30
+            ]
         }}
     );
 
     </script>
 
     </body>
+
     </html>
     """
 
 
 # =========================================================
-# 제목
+# 상단
 # =========================================================
+
 st.markdown(
     """
-    <div class="hero">
+    <div class="상단">
 
-        <h1>🧭 Seoul WayFinder</h1>
+        <h1>
+            🧭 서울 길찾기
+        </h1>
 
         <p>
-        출발지와 도착지를 입력하면
-        지도와 음성으로 이동 경로를 안내합니다.
+            출발지와 도착지를 입력하면
+            지도와 음성으로 이동 방법을 알려드립니다.
         </p>
 
     </div>
@@ -563,29 +743,35 @@ st.markdown(
 
 
 # =========================================================
-# 입력
+# 입력 화면
 # =========================================================
+
 st.markdown(
-    '<div class="card">',
+    '<div class="카드">',
     unsafe_allow_html=True,
 )
 
-col1, col2 = st.columns(2)
+
+왼쪽, 오른쪽 = st.columns(2)
 
 
-with col1:
+with 왼쪽:
 
-    origin_input = st.text_input(
+    출발지입력 = st.text_input(
         "📍 출발지",
-        placeholder="예: 서울역",
+
+        placeholder=
+        "예: 서울역"
     )
 
 
-with col2:
+with 오른쪽:
 
-    destination_input = st.text_input(
+    도착지입력 = st.text_input(
         "🏁 도착지",
-        placeholder="예: 경복궁",
+
+        placeholder=
+        "예: 경복궁"
     )
 
 
@@ -594,11 +780,14 @@ st.caption(
 )
 
 
-search_button = st.button(
+검색버튼 = st.button(
     "🧭 경로 찾기",
+
     type="primary",
+
     use_container_width=True,
 )
+
 
 st.markdown(
     "</div>",
@@ -609,34 +798,36 @@ st.markdown(
 # =========================================================
 # 경로 검색
 # =========================================================
-if search_button:
+
+if 검색버튼:
 
     if (
-        not origin_input.strip()
-        or not destination_input.strip()
+        not 출발지입력.strip()
+        or not 도착지입력.strip()
     ):
 
         st.warning(
-            "출발지와 도착지를 모두 입력해주세요."
+            "출발지와 도착지를 "
+            "모두 입력해주세요."
         )
 
         st.stop()
 
 
     with st.spinner(
-        "장소와 경로를 찾는 중입니다..."
+        "장소와 이동 경로를 찾는 중입니다..."
     ):
 
-        origin = geocode(
-            origin_input
+        출발지 = 장소찾기(
+            출발지입력
         )
 
-        destination = geocode(
-            destination_input
+        도착지 = 장소찾기(
+            도착지입력
         )
 
 
-        if origin is None:
+        if 출발지 is None:
 
             st.error(
                 "출발지를 찾지 못했습니다. "
@@ -647,7 +838,7 @@ if search_button:
             st.stop()
 
 
-        if destination is None:
+        if 도착지 is None:
 
             st.error(
                 "도착지를 찾지 못했습니다. "
@@ -658,86 +849,90 @@ if search_button:
             st.stop()
 
 
-        route = get_route(
-            origin["lat"],
-            origin["lon"],
-            destination["lat"],
-            destination["lon"],
+        경로 = 이동경로찾기(
+            출발지["위도"],
+            출발지["경도"],
+            도착지["위도"],
+            도착지["경도"],
         )
 
 
-    if route is None:
+    if 경로 is None:
 
         st.error(
-            "경로를 계산하지 못했습니다. "
+            "이동 경로를 찾지 못했습니다. "
             "잠시 후 다시 시도해주세요."
         )
 
         st.stop()
 
 
-    # 결과 저장
-    st.session_state.origin = origin
-    st.session_state.destination = destination
-    st.session_state.route = route
-    st.session_state.origin_name = origin_input
-    st.session_state.destination_name = destination_input
+    st.session_state["출발지"] = 출발지
+    st.session_state["도착지"] = 도착지
+    st.session_state["경로"] = 경로
+    st.session_state["출발지이름"] = 출발지입력
+    st.session_state["도착지이름"] = 도착지입력
 
 
 # =========================================================
-# 결과
+# 결과 화면
 # =========================================================
+
 if (
-    "route" in st.session_state
-    and st.session_state.route is not None
+    "경로" in st.session_state
+    and st.session_state["경로"] is not None
 ):
 
-    origin = st.session_state.origin
-    destination = st.session_state.destination
-    route = st.session_state.route
+    출발지 = st.session_state["출발지"]
+    도착지 = st.session_state["도착지"]
+    경로 = st.session_state["경로"]
 
-    origin_name = st.session_state.origin_name
-    destination_name = st.session_state.destination_name
+    출발지이름 = st.session_state["출발지이름"]
+    도착지이름 = st.session_state["도착지이름"]
 
-    steps = make_steps(route)
+    안내 = 이동안내만들기(
+        경로
+    )
 
 
     # -----------------------------------------------------
-    # 요약
+    # 결과 요약
     # -----------------------------------------------------
+
     st.markdown(
-        '<div class="card route-card">',
+        '<div class="카드 경로카드">',
         unsafe_allow_html=True,
     )
 
+
     st.markdown(
         f"""
-        <div class="muted">
+        <div class="설명">
             현재 선택한 경로
         </div>
 
         <h2>
-            {html.escape(origin_name)}
+            {html.escape(출발지이름)}
             →
-            {html.escape(destination_name)}
+            {html.escape(도착지이름)}
         </h2>
         """,
         unsafe_allow_html=True,
     )
 
 
-    c1, c2, c3 = st.columns(3)
+    첫번째, 두번째, 세번째 = st.columns(3)
 
 
-    with c1:
+    with 첫번째:
 
         st.markdown(
             f"""
-            <div class="big-number">
-                {format_duration(route["duration_s"])}
+            <div class="큰숫자">
+                {시간표시(경로["시간"])}
             </div>
 
-            <div class="muted">
+            <div class="설명">
                 예상 이동 시간
             </div>
             """,
@@ -745,31 +940,31 @@ if (
         )
 
 
-    with c2:
+    with 두번째:
 
         st.markdown(
             f"""
-            <div class="big-number">
-                {format_distance(route["distance_m"])}
+            <div class="큰숫자">
+                {거리표시(경로["거리"])}
             </div>
 
-            <div class="muted">
-                총 거리
+            <div class="설명">
+                총 이동 거리
             </div>
             """,
             unsafe_allow_html=True,
         )
 
 
-    with c3:
+    with 세번째:
 
         st.markdown(
             f"""
-            <div class="big-number">
-                {len(steps)}
+            <div class="큰숫자">
+                {len(안내)}
             </div>
 
-            <div class="muted">
+            <div class="설명">
                 주요 안내 단계
             </div>
             """,
@@ -783,34 +978,44 @@ if (
     )
 
 
-    # -----------------------------------------------------
-    # 지도 + 안내
-    # -----------------------------------------------------
-    left, right = st.columns(
+    # =====================================================
+    # 지도 / 음성
+    # =====================================================
+
+    지도영역, 안내영역 = st.columns(
         [1.6, 1]
     )
 
 
-    with left:
+    # -----------------------------------------------------
+    # 지도
+    # -----------------------------------------------------
+
+    with 지도영역:
 
         st.markdown(
-            '<div class="card">',
+            '<div class="카드">',
             unsafe_allow_html=True,
         )
 
+
         st.subheader(
-            "🗺️ 경로 지도"
+            "🗺️ 이동 경로"
         )
 
+
         components.html(
-            make_map(
-                origin,
-                destination,
-                route,
+            지도만들기(
+                출발지,
+                도착지,
+                경로,
             ),
+
             height=570,
+
             scrolling=False,
         )
+
 
         st.markdown(
             "</div>",
@@ -818,30 +1023,34 @@ if (
         )
 
 
-    with right:
+    # -----------------------------------------------------
+    # 음성 안내
+    # -----------------------------------------------------
 
-        # -----------------------------------------------
-        # 음성
-        # -----------------------------------------------
+    with 안내영역:
+
         st.markdown(
-            '<div class="card">',
+            '<div class="카드">',
             unsafe_allow_html=True,
         )
+
 
         st.subheader(
             "🔊 음성 안내"
         )
 
-        voice_text = make_voice_text(
-            origin_name,
-            destination_name,
-            route,
-            steps,
+
+        음성문장 = 음성문장만들기(
+            출발지이름,
+            도착지이름,
+            경로,
+            안내,
         )
 
-        voice_json = json.dumps(
-            voice_text,
-            ensure_ascii=False,
+
+        음성JSON = json.dumps(
+            음성문장,
+            ensure_ascii=False
         )
 
 
@@ -849,14 +1058,18 @@ if (
             f"""
             <script>
 
-            function startVoice() {{
+            function 음성시작() {{
 
-                if (!("speechSynthesis" in window)) {{
+                if (
+                    !("speechSynthesis"
+                    in window)
+                ) {{
 
                     document.getElementById(
-                        "message"
+                        "상태"
                     ).innerText =
-                        "이 브라우저는 음성 안내를 지원하지 않습니다.";
+                        "이 브라우저에서는 "
+                        + "음성 안내를 지원하지 않습니다.";
 
                     return;
                 }}
@@ -865,37 +1078,42 @@ if (
                 window.speechSynthesis.cancel();
 
 
-                const text =
-                    {voice_json};
+                const 문장 =
+                    {음성JSON};
 
 
-                const speech =
+                const 음성 =
                     new SpeechSynthesisUtterance(
-                        text
+                        문장
                     );
 
 
-                speech.lang = "ko-KR";
+                음성.lang =
+                    "ko-KR";
 
-                speech.rate = 0.95;
 
-                speech.pitch = 1.0;
+                음성.rate =
+                    0.95;
+
+
+                음성.pitch =
+                    1.0;
 
 
                 window.speechSynthesis.speak(
-                    speech
+                    음성
                 );
 
 
                 document.getElementById(
-                    "message"
+                    "상태"
                 ).innerText =
                     "🔊 음성 안내가 재생되었습니다.";
 
             }}
 
 
-            function stopVoice() {{
+            function 음성중지() {{
 
                 if (
                     "speechSynthesis"
@@ -904,8 +1122,9 @@ if (
 
                     window.speechSynthesis.cancel();
 
+
                     document.getElementById(
-                        "message"
+                        "상태"
                     ).innerText =
                         "⏹️ 음성 안내를 중지했습니다.";
 
@@ -917,7 +1136,8 @@ if (
 
 
             <button
-                onclick="startVoice()"
+                onclick="음성시작()"
+
                 style="
                     width:100%;
                     padding:14px;
@@ -936,7 +1156,8 @@ if (
 
 
             <button
-                onclick="stopVoice()"
+                onclick="음성중지()"
+
                 style="
                     width:100%;
                     padding:12px;
@@ -953,7 +1174,8 @@ if (
 
 
             <p
-                id="message"
+                id="상태"
+
                 style="
                     font-family:sans-serif;
                     color:#666;
@@ -964,8 +1186,10 @@ if (
                 한국어 음성 안내가 시작됩니다.
             </p>
             """,
+
             height=190,
         )
+
 
         st.markdown(
             "</div>",
@@ -973,20 +1197,22 @@ if (
         )
 
 
-        # -----------------------------------------------
-        # 이동 안내
-        # -----------------------------------------------
+        # -------------------------------------------------
+        # 이동 방법
+        # -------------------------------------------------
+
         st.markdown(
-            '<div class="card">',
+            '<div class="카드">',
             unsafe_allow_html=True,
         )
 
+
         st.subheader(
-            "🚶 이동 안내"
+            "🚶 이동 방법"
         )
 
 
-        if not steps:
+        if not 안내:
 
             st.info(
                 "세부 이동 안내가 없습니다."
@@ -994,30 +1220,34 @@ if (
 
         else:
 
-            for i, step in enumerate(
-                steps,
-                start=1,
+            for 번호, 단계 in enumerate(
+                안내,
+                start=1
             ):
 
                 st.markdown(
                     f"""
-                    <div class="step">
+                    <div class="단계">
 
-                        <div class="step-no">
-                            {i}
+                        <div class="단계번호">
+                            {번호}
                         </div>
 
                         <div>
 
                             <b>
-                                {html.escape(step["text"])}
+                                {html.escape(
+                                    단계["내용"]
+                                )}
                             </b>
 
                             <br>
 
-                            <span class="muted">
+                            <span class="설명">
                                 약
-                                {format_distance(step["distance"])}
+                                {거리표시(
+                                    단계["거리"]
+                                )}
                             </span>
 
                         </div>
@@ -1034,45 +1264,43 @@ if (
         )
 
 
-    # -----------------------------------------------------
-    # 안내
-    # -----------------------------------------------------
     st.info(
-        "💡 지도는 OpenStreetMap, 경로 계산은 OSRM을 사용합니다. "
-        "현재 버전은 도보 경로 중심이며 실시간 지하철 운행 정보는 포함하지 않습니다."
+        "💡 현재 버전은 도보 이동 경로를 기준으로 "
+        "안내합니다. 실시간 지하철 운행 정보는 포함하지 않습니다."
     )
 
 
 # =========================================================
-# 처음 화면
+# 처음 실행했을 때
 # =========================================================
+
 else:
 
     st.markdown(
         """
-        <div class="card">
+        <div class="카드">
 
         <h3>
-            ✨ 이렇게 사용하세요
+            ✨ 사용 방법
         </h3>
 
 
-        <div class="step">
+        <div class="단계">
 
-            <div class="step-no">
+            <div class="단계번호">
                 1
             </div>
 
             <div>
 
                 <b>
-                    출발지 입력
+                    출발지를 입력하세요.
                 </b>
 
                 <br>
 
-                <span class="muted">
-                    서울역, 강남역 또는 주소를 입력하세요.
+                <span class="설명">
+                    예: 서울역
                 </span>
 
             </div>
@@ -1080,22 +1308,22 @@ else:
         </div>
 
 
-        <div class="step">
+        <div class="단계">
 
-            <div class="step-no">
+            <div class="단계번호">
                 2
             </div>
 
             <div>
 
                 <b>
-                    도착지 입력
+                    도착지를 입력하세요.
                 </b>
 
                 <br>
 
-                <span class="muted">
-                    가고 싶은 장소를 입력하세요.
+                <span class="설명">
+                    예: 경복궁
                 </span>
 
             </div>
@@ -1103,22 +1331,22 @@ else:
         </div>
 
 
-        <div class="step">
+        <div class="단계">
 
-            <div class="step-no">
+            <div class="단계번호">
                 3
             </div>
 
             <div>
 
                 <b>
-                    경로 찾기
+                    경로 찾기를 누르세요.
                 </b>
 
                 <br>
 
-                <span class="muted">
-                    지도와 음성으로 이동 방법을 확인하세요.
+                <span class="설명">
+                    지도와 음성으로 이동 방법을 확인할 수 있습니다.
                 </span>
 
             </div>
@@ -1138,11 +1366,12 @@ else:
 
 
 # =========================================================
-# 출처
+# 하단
 # =========================================================
+
 st.caption(
     "지도: OpenStreetMap · "
     "장소 검색: Nominatim · "
     "경로 계산: OSRM · "
-    "음성: 브라우저 Web Speech API"
+    "음성: 브라우저 음성 기능"
 )
