@@ -1,231 +1,253 @@
-import os
+
 import streamlit as st
-import google.generativeai as genai
+from urllib.parse import urlencode
 
-# Streamlit 페이지 기본 설정 (시니어 모드에 맞게 넓고 깔끔한 레이아웃)
 st.set_page_config(
-    page_title="어르신 쉬운 지하철 길안내",
+    page_title="스마트 역찾기",
     page_icon="🚇",
-    layout="centered"
+    layout="wide",
 )
 
-# -----------------------------------------------------------------------------
-# CSS 스타일링 (어르신을 위한 큰 글씨, 명확한 색상 대비, 큰 버튼 적용)
-# -----------------------------------------------------------------------------
-st.markdown("""
-    <style>
-    /* 전체 폰트 크기 확대 및 가독성 향상 */
-    html, body, [class*="css"] {
-        font-size: 20px !important;
-        font-family: 'Malgun Gothic', '맑은 고딕', sans-serif !important;
-    }
-    
-    /* 제목 스타일 */
-    .title-text {
-        font-size: 34px !important;
-        font-weight: bold;
-        color: #1E3A8A;
-        text-align: center;
-        margin-bottom: 5px;
-    }
-    .subtitle-text {
-        font-size: 22px !important;
-        color: #4B5563;
-        text-align: center;
-        margin-bottom: 25px;
-    }
+# 서울 지하철 주요 역 샘플 데이터
+# 형식: 역 이름, 노선 목록, 지역/특징
+STATIONS = [
+    ("서울역", ["1호선", "4호선", "경의중앙선", "공항철도"], "서울 중구"),
+    ("시청", ["1호선", "2호선"], "서울 중구"),
+    ("종각", ["1호선"], "서울 종로구"),
+    ("종로3가", ["1호선", "3호선", "5호선"], "서울 종로구"),
+    ("종로5가", ["1호선"], "서울 종로구"),
+    ("동대문", ["1호선", "4호선"], "서울 종로구"),
+    ("동대문역사문화공원", ["2호선", "4호선", "5호선"], "서울 중구"),
+    ("신설동", ["1호선", "2호선"], "서울 동대문구"),
+    ("청량리", ["1호선", "경의중앙선"], "서울 동대문구"),
+    ("용산", ["1호선", "경의중앙선"], "서울 용산구"),
+    ("노량진", ["1호선", "9호선"], "서울 동작구"),
+    ("영등포", ["1호선"], "서울 영등포구"),
+    ("신도림", ["1호선", "2호선"], "서울 구로구"),
+    ("구로", ["1호선"], "서울 구로구"),
+    ("가산디지털단지", ["1호선", "7호선"], "서울 금천구"),
+    ("금정", ["1호선", "4호선"], "경기 군포시"),
+    ("구로디지털단지", ["2호선"], "서울 구로구"),
+    ("대림", ["2호선", "7호선"], "서울 영등포구"),
+    ("홍대입구", ["2호선", "경의중앙선", "공항철도"], "서울 마포구"),
+    ("합정", ["2호선", "6호선"], "서울 마포구"),
+    ("신촌", ["2호선"], "서울 마포구"),
+    ("이대", ["2호선"], "서울 서대문구"),
+    ("을지로입구", ["2호선"], "서울 중구"),
+    ("을지로3가", ["2호선", "3호선"], "서울 중구"),
+    ("을지로4가", ["2호선", "5호선"], "서울 중구"),
+    ("동대입구", ["3호선"], "서울 중구"),
+    ("충무로", ["3호선", "4호선"], "서울 중구"),
+    ("약수", ["3호선", "6호선"], "서울 중구"),
+    ("압구정", ["3호선"], "서울 강남구"),
+    ("신사", ["3호선", "신분당선"], "서울 강남구"),
+    ("고속터미널", ["3호선", "7호선", "9호선"], "서울 서초구"),
+    ("교대", ["2호선", "3호선"], "서울 서초구"),
+    ("양재", ["3호선", "신분당선"], "서울 서초구"),
+    ("수서", ["3호선", "수인분당선"], "서울 강남구"),
+    ("동작", ["4호선", "9호선"], "서울 동작구"),
+    ("이촌", ["4호선", "경의중앙선"], "서울 용산구"),
+    ("혜화", ["4호선"], "서울 종로구"),
+    ("명동", ["4호선"], "서울 중구"),
+    ("삼각지", ["4호선", "6호선"], "서울 용산구"),
+    ("서울대입구", ["2호선"], "서울 관악구"),
+    ("강남", ["2호선", "신분당선"], "서울 강남구"),
+    ("역삼", ["2호선"], "서울 강남구"),
+    ("선릉", ["2호선", "수인분당선"], "서울 강남구"),
+    ("삼성", ["2호선"], "서울 강남구"),
+    ("잠실", ["2호선", "8호선"], "서울 송파구"),
+    ("강변", ["2호선"], "서울 광진구"),
+    ("건대입구", ["2호선", "7호선"], "서울 광진구"),
+    ("왕십리", ["2호선", "5호선", "수인분당선", "경의중앙선"], "서울 성동구"),
+    ("성수", ["2호선"], "서울 성동구"),
+    ("뚝섬", ["2호선"], "서울 성동구"),
+    ("당산", ["2호선", "9호선"], "서울 영등포구"),
+    ("영등포구청", ["2호선", "5호선"], "서울 영등포구"),
+    ("까치산", ["2호선", "5호선"], "서울 강서구"),
+    ("신당", ["2호선", "6호선"], "서울 중구"),
+    ("합정", ["2호선", "6호선"], "서울 마포구"),
+    ("공덕", ["5호선", "6호선", "경의중앙선", "공항철도"], "서울 마포구"),
+    ("여의도", ["5호선", "9호선"], "서울 영등포구"),
+    ("광화문", ["5호선"], "서울 종로구"),
+    ("청구", ["5호선", "6호선"], "서울 중구"),
+    ("군자", ["5호선", "7호선"], "서울 광진구"),
+    ("천호", ["5호선", "8호선"], "서울 강동구"),
+    ("올림픽공원", ["5호선", "9호선"], "서울 송파구"),
+    ("왕십리", ["2호선", "5호선", "수인분당선", "경의중앙선"], "서울 성동구"),
+    ("고려대", ["6호선"], "서울 성북구"),
+    ("안암", ["6호선"], "서울 성북구"),
+    ("이태원", ["6호선"], "서울 용산구"),
+    ("월드컵경기장", ["6호선"], "서울 마포구"),
+    ("태릉입구", ["6호선", "7호선"], "서울 노원구"),
+    ("상봉", ["7호선", "경의중앙선"], "서울 중랑구"),
+    ("면목", ["7호선"], "서울 중랑구"),
+    ("청담", ["7호선"], "서울 강남구"),
+    ("학동", ["7호선"], "서울 강남구"),
+    ("논현", ["7호선", "신분당선"], "서울 강남구"),
+    ("반포", ["7호선"], "서울 서초구"),
+    ("장암", ["7호선"], "경기 의정부시"),
+    ("암사", ["8호선"], "서울 강동구"),
+    ("몽촌토성", ["8호선"], "서울 송파구"),
+    ("석촌", ["8호선", "9호선"], "서울 송파구"),
+    ("가락시장", ["3호선", "8호선"], "서울 송파구"),
+    ("복정", ["8호선", "수인분당선"], "서울 송파구"),
+    ("모란", ["8호선", "수인분당선"], "경기 성남시"),
+    ("김포공항", ["5호선", "9호선", "공항철도"], "서울 강서구"),
+    ("디지털미디어시티", ["6호선", "경의중앙선", "공항철도"], "서울 마포구"),
+    ("인천공항1터미널", ["공항철도"], "인천 중구"),
+    ("인천공항2터미널", ["공항철도"], "인천 중구"),
+    ("판교", ["신분당선", "경강선"], "경기 성남시"),
+    ("정자", ["신분당선", "수인분당선"], "경기 성남시"),
+    ("광교", ["신분당선"], "경기 수원시"),
+]
 
-    /* 입력창 및 라벨 크기 확대 */
-    .stTextInput > label {
-        font-size: 24px !important;
-        font-weight: bold !important;
-        color: #1F2937 !important;
-    }
-    .stTextInput input {
-        font-size: 22px !important;
-        height: 55px !important;
-        border: 2px solid #3B82F6 !important;
-        border-radius: 10px !important;
-    }
+# 중복 역 이름 정리
+station_map = {}
+for name, lines, area in STATIONS:
+    if name not in station_map:
+        station_map[name] = {"name": name, "lines": [], "area": area}
+    for line in lines:
+        if line not in station_map[name]["lines"]:
+            station_map[name]["lines"].append(line)
 
-    /* 버튼 스타일 (크고 누르기 쉽게) */
-    .stButton > button {
-        font-size: 24px !important;
-        font-weight: bold !important;
-        background-color: #2563EB !important;
-        color: white !important;
-        height: 60px !important;
-        width: 100% !important;
-        border-radius: 12px !important;
-        border: none !important;
-        box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1) !important;
-    }
-    .stButton > button:hover {
-        background-color: #1D4ED8 !important;
-    }
+stations = sorted(
+    station_map.values(),
+    key=lambda item: item["name"]
+)
+all_lines = sorted({line for station in stations for line in station["lines"]})
 
-    /* 자주 가는 장소 버튼 스타일 */
-    .shortcut-btn button {
-        background-color: #F3F4F6 !important;
-        color: #1F2937 !important;
-        font-size: 18px !important;
-        height: 45px !important;
-        border: 1px solid #D1D5DB !important;
-    }
+st.title("🚇 스마트 역찾기")
+st.caption("역 이름 검색부터 노선 확인, 출발역과 도착역 찾기까지")
 
-    /* 결과 카드 스타일 */
-    .result-box {
-        background-color: #F0F9FF;
-        border-left: 8px solid #0284C7;
-        padding: 20px;
-        border-radius: 10px;
-        margin-top: 20px;
-        font-size: 22px;
-        line-height: 1.8;
-    }
-    
-    .tip-box {
-        background-color: #FEF3C7;
-        border-left: 8px solid #D97706;
-        padding: 15px;
-        border-radius: 10px;
-        margin-top: 15px;
-        font-size: 19px;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-# -----------------------------------------------------------------------------
-# Gemini API 설정
-# -----------------------------------------------------------------------------
-api_key = None
-if "GEMINI_API_KEY" in st.secrets:
-    api_key = st.secrets["GEMINI_API_KEY"]
-elif "GEMINI_API_KEY" in os.environ:
-    api_key = os.environ["GEMINI_API_KEY"]
-
-if api_key:
-    genai.configure(api_key=api_key)
-
-# -----------------------------------------------------------------------------
-# AI 경로 탐색 함수
-# -----------------------------------------------------------------------------
-def get_subway_directions(start_location, destination):
-    """
-    Gemini 2.5 Flash Lite 모델을 사용하여 어르신 맞춤형 지하철 경로를 생성합니다.
-    """
-    if not api_key:
-        return "⚠️ API 키가 설정되지 않았습니다. Secrets에 GEMINI_API_KEY를 입력해주세요."
-
-    prompt = f"""
-    너는 대중교통 이용이 어려운 어르신들을 위한 아주 친절하고 쉬운 지하철 안내 도우미야.
-    
-    [출발 위치/역]: {start_location}
-    [도착 장소/건물/역]: {destination}
-
-    다음 지침에 따라 어르신이 이해하기 가장 쉽게 지하철 길안내를 작성해줘:
-
-    1. **가장 가까운 역 찾기**: 도착지가 건물/장소 이름이라면, 도착지와 가장 가까운 지하철역과 몇 번 출구로 나가야 하는지 정확히 알려줘.
-    2. **쉬운 탑승 안내**: 
-       - 무슨 색깔 노선(예: 1호선 파란색, 2호선 초록색 등)을 타야 하는지 알려줘.
-       - 어느 방향(OO역 방면) 전철을 타야 하는지 명확히 적어줘.
-    3. **환승 안내**: 
-       - 환승이 필요하다면 어디서 갈아타야 하는지 큰 글씨 느낌으로 알기 쉽게 1단계, 2단계로 나누어 설명해줘. (최대 환승 2회 이하의 쉬운 경로 추천)
-       - 환승이 없으면 "갈아탈 필요 없이 한 번에 갑니다"라고 말해줘.
-    4. **어르신 친절 팁**:
-       - 계단이 부담스러우실 수 있으니 엘리베이터 이용 팁이나 출구 도보 시간(예: 약 5분 소요)을 따뜻한 어조로 알려줘.
-
-    어투는 친절한 존댓말("어르신, ~하세요", "~하시면 됩니다")을 사용하고, 복잡한 기호나 어려운 철도 용어 대신 쉽고 명확하게 작성해줘.
-    """
-
-    try:
-        model = genai.GenerativeModel("gemini-2.5-flash-lite")
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"❌ 길안내를 가져오는 중에 오류가 발생했습니다.\n오류 내용: {str(e)}"
-
-# -----------------------------------------------------------------------------
-# 메인 화면 구성
-# -----------------------------------------------------------------------------
-st.markdown("<div class='title-text'>🚇 어르신 쉬운 지하철 도우미</div>", unsafe_allow_html=True)
-st.markdown("<div class='subtitle-text'>복잡한 노선도 없이, 목적지만 입력하면 쉽게 알려드립니다!</div>", unsafe_allow_html=True)
-
-st.divider()
-
-# 1. 입력 세션 (출발지 및 목적지)
-st.subheader("📍 어디서 출발해서 어디로 가시나요?")
-
-col1, col2 = st.columns(1)
-
-# 세션 상태 초기화 (자주 가는 장소 클릭 시 사용)
-if "dest_input" not in st.session_state:
-    st.session_state["dest_input"] = ""
-
-start_input = st.text_input(
-    "1. 계신 곳 (출발역 또는 현재 위치)", 
-    placeholder="예: 서울역, 청량리역, 강남역",
-    key="start_key"
+tab_search, tab_line, tab_route = st.tabs(
+    ["🔎 역 검색", "🗺️ 노선별 탐색", "📍 길찾기"]
 )
 
-dest_input = st.text_input(
-    "2. 가고자 하는 곳 (목적지 건물이나 역 이름)", 
-    value=st.session_state["dest_input"],
-    placeholder="예: 서울대병원, 자갈치시장, 롯데월드, 종로3가역",
-    key="dest_key"
-)
+with tab_search:
+    st.subheader("어떤 역을 찾으세요?")
+    keyword = st.text_input(
+        "역 이름 입력",
+        placeholder="예: 강남, 서울역, 홍대",
+        key="station_search",
+    )
+    line_filter = st.selectbox(
+        "노선 필터",
+        ["전체 노선"] + all_lines,
+        key="search_line",
+    )
 
-# 2. 어르신 자주 가시는 장소 빠른 선택 (편의 기능)
-st.write("💡 **자주 가시는 곳을 누르시면 자동으로 입력됩니다:**")
-quick_cols = st.columns(4)
+    results = [
+        station for station in stations
+        if keyword.strip().casefold() in station["name"].casefold()
+        and (
+            line_filter == "전체 노선"
+            or line_filter in station["lines"]
+        )
+    ]
 
-def set_destination(place_name):
-    st.session_state["dest_input"] = place_name
+    st.write(f"검색 결과: **{len(results)}개 역**")
 
-with quick_cols[0]:
-    if st.button("🏥 서울대병원", key="btn1"):
-        set_destination("혜화역 서울대병원")
-        st.rerun()
-with quick_cols[1]:
-    if st.button("🏞️ 남산서울타워", key="btn2"):
-        set_destination("명동역 남산타워")
-        st.rerun()
-with quick_cols[2]:
-    if st.button("🛒 동대문시장", key="btn3"):
-        set_destination("동대문역 동대문시장")
-        st.rerun()
-with quick_cols[3]:
-    if st.button("🚌 서울고속터미널", key="btn4"):
-        set_destination("고속터미널역")
-        st.rerun()
-
-st.write("") # 간격 조정
-
-# 3. 길찾기 실행 버튼
-search_button = st.button("🔍 쉬운 길안내 시작하기")
-
-# 4. 결과 출력
-if search_button:
-    if not start_input.strip():
-        st.warning("⚠️ 출발하시는 곳이나 출발역을 입력해주세요!")
-    elif not dest_input.strip():
-        st.warning("⚠️ 가고자 하는 목적지나 건물 이름을 입력해주세요!")
+    if results:
+        for station in results:
+            with st.container(border=True):
+                st.markdown(f"### 🚉 {station['name']}역")
+                st.write("노선: " + " · ".join(station["lines"]))
+                st.caption("지역: " + station["area"])
     else:
-        with st.spinner("어르신을 위해 가장 쉽고 편한 길을 찾는 중입니다... 잠시만 기다려주세요 ⏳"):
-            result_text = get_subway_directions(start_input, dest_input)
-            
-            st.markdown("### 🗺️ 맞춤 길안내 결과")
-            st.markdown(f"<div class='result-box'>{result_text}</div>", unsafe_allow_html=True)
-            
-            # 어르신 안심 안내 팁
-            st.markdown("""
-            <div class='tip-box'>
-                💡 <b>어르신을 위한 지하철 이용 팁!</b><br>
-                - 만 65세 이상 어르신은 <b>우대용 교통카드</b>를 이용하시면 지하철요금이 무료입니다.<br>
-                - 계단이 높거나 이용이 불편하실 땐 역 안의 <b>엘리베이터</b>나 <b>역무원 호출 벨</b>을 이용하세요.
-            </div>
-            """, unsafe_allow_html=True)
+        st.info("검색 결과가 없습니다. 역 이름이나 노선 필터를 바꿔보세요.")
 
-# 하단 안내
+with tab_line:
+    st.subheader("노선별로 역 둘러보기")
+    selected_line = st.selectbox("노선 선택", all_lines, key="line_select")
+
+    line_stations = [
+        station for station in stations
+        if selected_line in station["lines"]
+    ]
+
+    st.write(f"**{selected_line}** · 등록된 역 {len(line_stations)}개")
+    st.caption(
+        "아래 목록은 검색용 데이터이며, 실제 노선의 전체 역 순서와 다를 수 있습니다."
+    )
+
+    if line_stations:
+        for start in range(0, len(line_stations), 10):
+            chunk = line_stations[start:start + 10]
+            with st.expander(
+                f"{start + 1}~{start + len(chunk)}번 역 보기",
+                expanded=(start == 0),
+            ):
+                for station in chunk:
+                    st.write(
+                        f"🚉 **{station['name']}** — "
+                        f"{station['area']}"
+                    )
+    else:
+        st.info("이 노선에 등록된 역이 없습니다.")
+
+with tab_route:
+    st.subheader("출발역에서 도착역까지")
+    station_names = [station["name"] for station in stations]
+
+    col1, col2 = st.columns(2)
+    with col1:
+        origin = st.selectbox(
+            "출발역",
+            station_names,
+            index=station_names.index("서울역"),
+            key="origin",
+        )
+    with col2:
+        destination = st.selectbox(
+            "도착역",
+            station_names,
+            index=station_names.index("강남"),
+            key="destination",
+        )
+
+    if st.button("길찾기 링크 만들기", type="primary", use_container_width=True):
+        if origin == destination:
+            st.warning("출발역과 도착역이 같습니다. 다른 역을 선택해주세요.")
+        else:
+            start_station = station_map[origin]
+            end_station = station_map[destination]
+            shared_lines = sorted(
+                set(start_station["lines"]) & set(end_station["lines"])
+            )
+
+            st.markdown("### 🧭 선택한 경로")
+            st.write(f"**출발:** {origin}역 ({', '.join(start_station['lines'])})")
+            st.write(f"**도착:** {destination}역 ({', '.join(end_station['lines'])})")
+
+            if shared_lines:
+                st.success(
+                    "두 역에 공통으로 등록된 노선: "
+                    + ", ".join(shared_lines)
+                )
+            else:
+                st.info(
+                    "두 역의 공통 노선이 없습니다. 환승 정보는 "
+                    "아래 지도에서 확인해주세요."
+                )
+
+            params = urlencode({
+                "api": "1",
+                "origin": origin + "역, 서울",
+                "destination": destination + "역, 서울",
+                "travelmode": "transit",
+            })
+            url = "https://www.google.com/maps/dir/?" + params
+
+            st.link_button(
+                "🗺️ 지도에서 대중교통 경로 확인",
+                url,
+                use_container_width=True,
+            )
+            st.caption(
+                "예상 소요 시간, 실제 운행 경로 및 환승 정보는 지도 서비스에서 확인하세요."
+            )
+
 st.divider()
-st.caption("본 서비스는 어르신들의 편리한 대중교통 이용을 돕기 위해 AI(Gemini) 기술을 활용하여 제작되었습니다.")
+st.caption(
+    "스마트 역찾기 | 역 데이터는 주요 역 예시이며 실시간 교통 정보가 아닙니다."
+)
