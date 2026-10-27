@@ -95,9 +95,7 @@ with top3:
         st.markdown('<div class="pill">STEP 03 · 시간 확인</div>', unsafe_allow_html=True)
         st.markdown('<div class="illustration">⏰</div>', unsafe_allow_html=True)
         st.subheader("역까지 이동")
-        travel_minutes = st.number_input("집에서 역까지 (분)", min_value=0, max_value=600, value=40, step=5)
-        extra_minutes = st.number_input("이동 여유 시간 (분)", min_value=0, max_value=180, value=15, step=5,
-                                        help="교통 상황이나 길 찾기에 대비한 여유 시간입니다.")
+        st.markdown('<p class="small-muted">역에 도착할 시각을 기준으로 일정을 안내해 드려요.</p>', unsafe_allow_html=True)
         station_buffer = st.number_input("기차 출발 전 역 도착 (분)", min_value=10, max_value=120, value=30, step=5,
                                          help="이동이 불편하거나 처음 가는 역이라면 30~45분 이상 권장합니다.")
         st.markdown('<p class="small-muted">엘리베이터 이용, 승강장 찾기 등을 고려해 여유 있게 준비하세요.</p>', unsafe_allow_html=True)
@@ -125,18 +123,15 @@ if st.button("시간표 계산하기", type="primary", use_container_width=True)
             st.error(error)
     else:
         station_arrival_dt = departure_dt - timedelta(minutes=int(station_buffer))
-        leave_home_dt = station_arrival_dt - timedelta(minutes=int(travel_minutes) + int(extra_minutes))
         st.success(f"{departure_station.strip()}에서 출발해 {arrival_station.strip()}에 도착하는 일정이에요.")
         if train_name.strip():
             st.caption(f"열차: {train_name.strip()}")
-        r1, r2, r3, r4 = st.columns(4, gap="medium")
+        r1, r2, r3 = st.columns(3, gap="medium")
         with r1:
-            st.metric("🏠 집에서 출발", leave_home_dt.strftime("%m월 %d일 %H:%M"))
-        with r2:
             st.metric("🚉 역 도착", station_arrival_dt.strftime("%m월 %d일 %H:%M"))
-        with r3:
+        with r2:
             st.metric("🚆 기차 출발", departure_dt.strftime("%m월 %d일 %H:%M"))
-        with r4:
+        with r3:
             st.metric("🏁 목적지 도착", arrival_dt.strftime("%m월 %d일 %H:%M"))
 
         with st.container(border=True):
