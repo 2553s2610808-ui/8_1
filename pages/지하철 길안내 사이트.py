@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import requests
@@ -6,13 +7,15 @@ import re
 import json
 import math
 import pydeck as pdk
-from urllib.parse import quote
-from io import StringIO
-from itertools import combinations
 import streamlit.components.v1 as components
 
+from urllib.parse import quote
+from io import StringIO, BytesIO
+from itertools import combinations
+
+
 # ==================================================
-# 기본 설정
+# 1. 기본 설정
 # ==================================================
 
 st.set_page_config(
@@ -33,15 +36,20 @@ SECTION_URL = (
     "main/data/subway_section.csv"
 )
 
+KRIC_URL = (
+    "https://data.kric.go.kr/rips/M_01_01/"
+    "detail.do?id=1294&lcd=A"
+)
+
 공식사이버스테이션 = (
     "https://www.seoulmetro.co.kr/kr/cyberStation.do"
 )
 
-공식노선도자료 = (
-    "https://data.seoul.go.kr/dataList/OA-22535/F/1/datasetView.do"
-)
 
-# 노선별 지도 색상
+# ==================================================
+# 2. 노선별 색상
+# ==================================================
+
 노선색상표 = {
     "1호선": [0, 72, 152],
     "2호선": [0, 162, 98],
@@ -69,9 +77,11 @@ SECTION_URL = (
 
 
 def 노선색상(노선):
+
     노선문자 = str(노선).replace(" ", "")
 
     for 이름, 색상 in 노선색상표.items():
+
         if 이름 in 노선문자:
             return 색상
 
@@ -79,11 +89,12 @@ def 노선색상(노선):
 
 
 # ==================================================
-# 파란색 디자인
+# 3. 디자인
 # ==================================================
 
 st.markdown("""
 <style>
+
 .stApp {
     background: #F1F7FF;
     color: #172554;
@@ -108,7 +119,11 @@ div[data-testid="stTextInput"] input {
 }
 
 div[data-testid="stFormSubmitButton"] button {
-    background: linear-gradient(90deg, #1D4ED8, #0284C7);
+    background: linear-gradient(
+        90deg,
+        #1D4ED8,
+        #0284C7
+    );
     border: none;
     border-radius: 12px;
     color: white;
@@ -133,16 +148,22 @@ div[data-testid="stExpander"] {
 hr {
     border-color: #DBEAFE;
 }
+
 </style>
 """, unsafe_allow_html=True)
 
 
 # ==================================================
-# 역 이름 정리
+# 4. 역 이름 정리
 # ==================================================
 
 def 역이름키(이름):
-    이름 = re.sub(r"\s+", "", str(이름))
+
+    이름 = re.sub(
+        r"\s+",
+        "",
+        str(이름)
+    )
 
     if 이름 in ("서울", "서울역"):
         return "서울역"
@@ -154,12 +175,15 @@ def 역이름키(이름):
 
 
 def 역이름표시(node, 역정보):
+
     정보 = 역정보.get(str(node))
 
     if not 정보:
         return "역 이름 확인 필요"
 
-    이름 = str(정보.get("name", "")).strip()
+    이름 = str(
+        정보.get("name", "")
+    ).strip()
 
     if not 이름 or 이름.isdigit():
         return "역 이름 확인 필요"
@@ -174,7 +198,7 @@ def 역이름표시(node, 역정보):
 
 
 # ==================================================
-# 역 사이 거리 계산
+# 5. 역 사이 거리 계산
 # ==================================================
 
 def 두역거리(a, b):
@@ -192,8 +216,13 @@ def 두역거리(a, b):
     위도1 = math.radians(a["lat"])
     위도2 = math.radians(b["lat"])
 
-    위도차 = math.radians(b["lat"] - a["lat"])
-    경도차 = math.radians(b["lng"] - a["lng"])
+    위도차 = math.radians(
+        b["lat"] - a["lat"]
+    )
+
+    경도차 = math.radians(
+        b["lng"] - a["lng"]
+    )
 
     값 = (
         (1 - math.cos(위도차)) / 2
@@ -202,13 +231,19 @@ def 두역거리(a, b):
         * (1 - math.cos(경도차)) / 2
     )
 
-    값 = min(1, max(0, 값))
+    값 = min(
+        1,
+        max(0, 값)
+    )
 
-    return 2 * 반지름 * math.asin(값 ** 0.5)
+    return (
+        2 * 반지름
+        * math.asin(값 ** 0.5)
+    )
 
 
 # ==================================================
-# 네이버 지도
+# 6. 네이버 지도
 # ==================================================
 
 def 네이버지도용좌표(lat, lng):
@@ -219,7 +254,9 @@ def 네이버지도용좌표(lat, lng):
     x = lng * 20037508.34 / 180
 
     y = math.log(
-        math.tan((90 + lat) * math.pi / 360)
+        math.tan(
+            (90 + lat) * math.pi / 360
+        )
     ) / (math.pi / 180)
 
     y = y * 20037508.34 / 180
@@ -227,7 +264,11 @@ def 네이버지도용좌표(lat, lng):
     return x, y
 
 
-def 네이버지도경로URL(출발노드, 도착노드, 역정보):
+def 네이버지도경로URL(
+    출발노드,
+    도착노드,
+    역정보
+):
 
     출발 = 역정보.get(str(출발노드))
     도착 = 역정보.get(str(도착노드))
@@ -267,7 +308,7 @@ def 네이버지도경로URL(출발노드, 도착노드, 역정보):
 
 
 # ==================================================
-# 지하철 데이터 불러오기
+# 7. 기존 지하철 데이터 불러오기
 # ==================================================
 
 @st.cache_data(ttl=86400)
@@ -299,19 +340,41 @@ def 데이터불러오기():
 
     for row in 역자료.to_dict("records"):
 
-        node = row.get("station_id", "").strip()
-        line = row.get("line", "").strip()
-        name = row.get("name", "").strip()
-        code = row.get("station_cd", "").strip()
+        node = row.get(
+            "station_id",
+            ""
+        ).strip()
+
+        line = row.get(
+            "line",
+            ""
+        ).strip()
+
+        name = row.get(
+            "name",
+            ""
+        ).strip()
+
+        code = row.get(
+            "station_cd",
+            ""
+        ).strip()
 
         if not node or not line or not name:
             continue
 
         try:
-            lat = float(row.get("lat", ""))
-            lng = float(row.get("lng", ""))
+
+            lat = float(
+                row.get("lat", "")
+            )
+
+            lng = float(
+                row.get("lng", "")
+            )
 
         except (ValueError, TypeError):
+
             lat = None
             lng = None
 
@@ -323,6 +386,7 @@ def 데이터불러오기():
         }
 
         if code:
+
             역코드표.setdefault(
                 (line, code),
                 node
@@ -361,26 +425,38 @@ def 데이터불러오기():
     # 인접 역 연결
     for row in 구간자료.to_dict("records"):
 
-        line = row.get("line", "").strip()
+        line = row.get(
+            "line",
+            ""
+        ).strip()
 
         code_a = row.get(
-            "up_station_code", ""
+            "up_station_code",
+            ""
         ).strip()
 
         code_b = row.get(
-            "down_station_code", ""
+            "down_station_code",
+            ""
         ).strip()
 
         name_a = row.get(
-            "up_station_name", ""
+            "up_station_name",
+            ""
         ).strip()
 
         name_b = row.get(
-            "down_station_name", ""
+            "down_station_name",
+            ""
         ).strip()
 
-        a = 역코드표.get((line, code_a))
-        b = 역코드표.get((line, code_b))
+        a = 역코드표.get(
+            (line, code_a)
+        )
+
+        b = 역코드표.get(
+            (line, code_b)
+        )
 
         if not a:
 
@@ -410,8 +486,8 @@ def 데이터불러오기():
             정보_b = 역정보[b]
 
             if all(
-                값 is not None
-                for 값 in (
+                x is not None
+                for x in (
                     정보_a["lat"],
                     정보_a["lng"],
                     정보_b["lat"],
@@ -420,6 +496,7 @@ def 데이터불러오기():
             ):
 
                 노선도구간.append({
+
                     "line": line,
 
                     "path": [
@@ -441,7 +518,9 @@ def 데이터불러오기():
 
     for node, info in 역정보.items():
 
-        key = 역이름키(info["name"])
+        key = 역이름키(
+            info["name"]
+        )
 
         이름별노드.setdefault(
             key,
@@ -467,11 +546,271 @@ def 데이터불러오기():
         for key, nodes in 이름별노드.items()
     }
 
-    return 역정보, 그래프, 역검색표, 노선도구간
+    return (
+        역정보,
+        그래프,
+        역검색표,
+        노선도구간
+    )
 
 
 # ==================================================
-# 지하철 노선도 그리기
+# 8. 전국 역 목록 불러오기
+# ==================================================
+
+def 컬럼찾기(df, 후보목록):
+
+    정리된컬럼 = {}
+
+    for column in df.columns:
+
+        key = re.sub(
+            r"[\s_\-]",
+            "",
+            str(column)
+        ).lower()
+
+        정리된컬럼[key] = column
+
+    for candidate in 후보목록:
+
+        key = re.sub(
+            r"[\s_\-]",
+            "",
+            candidate
+        ).lower()
+
+        if key in 정리된컬럼:
+            return 정리된컬럼[key]
+
+    return None
+
+
+def 전국역자료가공(원본):
+
+    원본 = 원본.copy()
+
+    원본.columns = [
+        str(column).strip()
+        for column in 원본.columns
+    ]
+
+    역명컬럼 = 컬럼찾기(
+        원본,
+        [
+            "역명(한글)",
+            "역명(국문)",
+            "한글역명",
+            "역명",
+            "STIN_NM"
+        ]
+    )
+
+    노선컬럼 = 컬럼찾기(
+        원본,
+        [
+            "운영노선",
+            "운영노선명",
+            "선명",
+            "노선명",
+            "노선",
+            "LN_NM"
+        ]
+    )
+
+    기관컬럼 = 컬럼찾기(
+        원본,
+        [
+            "철도운영기관명",
+            "운영기관명",
+            "운영기관",
+            "철도운영기관",
+            "RAIL_OPR_ISTT_NM"
+        ]
+    )
+
+    지역컬럼 = 컬럼찾기(
+        원본,
+        [
+            "권역명",
+            "권역",
+            "권역코드",
+            "지역명",
+            "지역",
+            "시도명"
+        ]
+    )
+
+    if not 역명컬럼:
+
+        raise ValueError(
+            "한글 역명 컬럼을 찾지 못했어. "
+            "공식 전국 도시광역철도 역사정보 "
+            "파일인지 확인해 줘."
+        )
+
+    def 값가져오기(row, column):
+
+        if not column:
+            return ""
+
+        value = row.get(
+            column,
+            ""
+        )
+
+        if pd.isna(value):
+            return ""
+
+        return str(value).strip()
+
+    권역코드표 = {
+        "01": "수도권",
+        "02": "부산권",
+        "03": "대구권",
+        "04": "광주권",
+        "05": "대전권"
+    }
+
+    def 지역분류(region, operator, line):
+
+        region = str(region).strip()
+
+        if region:
+
+            if region in 권역코드표:
+                return 권역코드표[region]
+
+            if "수도권" in region:
+                return "수도권"
+
+            for keyword, result in [
+                ("서울", "수도권"),
+                ("경기", "수도권"),
+                ("인천", "수도권"),
+                ("부산", "부산권"),
+                ("울산", "부산권"),
+                ("대구", "대구권"),
+                ("광주", "광주권"),
+                ("대전", "대전권")
+            ]:
+
+                if keyword in region:
+                    return result
+
+            return region
+
+        all_text = operator + " " + line
+
+        지역키워드 = {
+            "수도권": [
+                "서울교통공사",
+                "인천교통공사",
+                "서울메트로",
+                "GTX",
+                "수도권",
+                "신분당선",
+                "경의중앙선",
+                "수인분당선",
+                "경강선",
+                "경춘선",
+                "서해선"
+            ],
+
+            "부산권": [
+                "부산교통공사",
+                "부산",
+                "부산김해경전철",
+                "동해선"
+            ],
+
+            "대구권": [
+                "대구교통공사",
+                "대구",
+                "대경선"
+            ],
+
+            "광주권": [
+                "광주교통공사",
+                "광주"
+            ],
+
+            "대전권": [
+                "대전교통공사",
+                "대전"
+            ]
+        }
+
+        for region_name, keywords in 지역키워드.items():
+
+            if any(
+                keyword in all_text
+                for keyword in keywords
+            ):
+
+                return region_name
+
+        return "권역 확인 필요"
+
+    자료 = []
+
+    for _, row in 원본.iterrows():
+
+        역명 = 값가져오기(
+            row,
+            역명컬럼
+        )
+
+        if not 역명:
+            continue
+
+        노선 = 값가져오기(
+            row,
+            노선컬럼
+        )
+
+        기관 = 값가져오기(
+            row,
+            기관컬럼
+        )
+
+        지역 = 값가져오기(
+            row,
+            지역컬럼
+        )
+
+        자료.append({
+
+            "지역": 지역분류(
+                지역,
+                기관,
+                노선
+            ),
+
+            "운영기관": 기관 or "정보 없음",
+
+            "노선": 노선 or "정보 없음",
+
+            "역명": 역명
+        })
+
+    결과 = pd.DataFrame(자료)
+
+    if 결과.empty:
+        raise ValueError("역 데이터가 비어 있어.")
+
+    return (
+        결과
+        .drop_duplicates()
+        .sort_values(
+            ["지역", "노선", "역명"]
+        )
+        .reset_index(drop=True)
+    )
+
+
+# ==================================================
+# 9. 지하철 지도 그리기
 # ==================================================
 
 def 노선도그리기(
@@ -494,10 +833,12 @@ def 노선도그리기(
 
     if not 표시구간:
 
-        st.warning("표시할 노선 좌표가 없어.")
+        st.warning(
+            "표시할 역 좌표가 없어."
+        )
+
         return
 
-    # 역 점 데이터
     역점목록 = []
 
     for node, info in 역정보.items():
@@ -515,17 +856,22 @@ def 노선도그리기(
             continue
 
         역점목록.append({
+
             "position": [
                 info["lng"],
                 info["lat"]
             ],
-            "name": 역이름표시(node, 역정보),
+
+            "name": 역이름표시(
+                node,
+                역정보
+            ),
+
             "line": info["line"]
         })
 
     layers = [
 
-        # 노선 선
         pdk.Layer(
             "PathLayer",
             data=표시구간,
@@ -537,7 +883,6 @@ def 노선도그리기(
             pickable=True
         ),
 
-        # 역 위치
         pdk.Layer(
             "ScatterplotLayer",
             data=역점목록,
@@ -554,14 +899,16 @@ def 노선도그리기(
         )
     ]
 
-    # 현재 검색한 경로를 붉은 선으로 강조
+    # 검색 경로 표시
     if 강조경로:
 
         경로좌표 = []
 
         for node in 강조경로:
 
-            info = 역정보.get(str(node))
+            info = 역정보.get(
+                str(node)
+            )
 
             if (
                 info
@@ -579,17 +926,19 @@ def 노선도그리기(
             layers.append(
                 pdk.Layer(
                     "PathLayer",
-                    data=[{"path": 경로좌표}],
+                    data=[
+                        {
+                            "path": 경로좌표
+                        }
+                    ],
                     get_path="path",
                     get_color=[239, 68, 68],
                     get_width=8,
                     width_scale=1,
-                    width_min_pixels=4,
-                    pickable=False
+                    width_min_pixels=4
                 )
             )
 
-    # 지도 중심 계산
     if 강조경로:
 
         중심좌표 = [
@@ -603,7 +952,8 @@ def 노선도그리기(
     else:
 
         중심좌표 = [
-            info for info in 역정보.values()
+            info
+            for info in 역정보.values()
             if info["lat"] is not None
             and info["lng"] is not None
         ]
@@ -611,11 +961,13 @@ def 노선도그리기(
     if 중심좌표:
 
         중심위도 = sum(
-            x["lat"] for x in 중심좌표
+            x["lat"]
+            for x in 중심좌표
         ) / len(중심좌표)
 
         중심경도 = sum(
-            x["lng"] for x in 중심좌표
+            x["lng"]
+            for x in 중심좌표
         ) / len(중심좌표)
 
     else:
@@ -633,6 +985,7 @@ def 노선도그리기(
         zoom = 9.8
 
     deck = pdk.Deck(
+
         layers=layers,
 
         initial_view_state=pdk.ViewState(
@@ -662,7 +1015,7 @@ def 노선도그리기(
 
 
 # ==================================================
-# 경로 계산
+# 10. 최적 경로 계산
 # ==================================================
 
 def 경로찾기(
@@ -697,6 +1050,7 @@ def 경로찾기(
             continue
 
         if 현재 in 도착노드들:
+
             목적지노드 = 현재
             break
 
@@ -720,7 +1074,10 @@ def 경로찾기(
 
             기존비용 = 거리표.get(
                 다음,
-                (float("inf"), float("inf"))
+                (
+                    float("inf"),
+                    float("inf")
+                )
             )
 
             if 새비용 < 기존비용:
@@ -730,7 +1087,11 @@ def 경로찾기(
 
                 heapq.heappush(
                     대기열,
-                    (새비용[0], 새비용[1], 다음)
+                    (
+                        새비용[0],
+                        새비용[1],
+                        다음
+                    )
                 )
 
     if 목적지노드 is None:
@@ -754,7 +1115,7 @@ def 경로찾기(
 
 
 # ==================================================
-# 경로를 노선별로 구분
+# 11. 경로 노선 구분
 # ==================================================
 
 def 구간나누기(경로, 역정보):
@@ -771,35 +1132,45 @@ def 구간나누기(경로, 역정보):
         ):
 
             구간들.append({
+
                 "line": 노선,
                 "nodes": [node]
+
             })
 
         else:
 
-            구간들[-1]["nodes"].append(node)
+            구간들[-1]["nodes"].append(
+                node
+            )
 
     return 구간들
 
 
 # ==================================================
-# 화면 제목 및 데이터 불러오기
+# 12. 앱 제목 및 데이터 불러오기
 # ==================================================
 
 st.title("🚇 BLUE ROUTE")
-st.caption("파란색 테마의 지하철 길찾기")
+st.caption("전국 역 검색과 지하철 길찾기")
 
 try:
 
-    with st.spinner("지하철 정보를 불러오는 중..."):
+    with st.spinner(
+        "지하철 정보를 불러오는 중..."
+    ):
 
-        역정보, 그래프, 역검색표, 노선도구간 = 데이터불러오기()
+        (
+            역정보,
+            그래프,
+            역검색표,
+            노선도구간
+        ) = 데이터불러오기()
 
 except Exception as e:
 
     st.error(
-        "지하철 데이터를 불러오지 못했어. "
-        "인터넷 연결이나 데이터 주소를 확인해 줘."
+        "지하철 정보를 불러오지 못했어."
     )
 
     st.caption(str(e))
@@ -808,7 +1179,358 @@ except Exception as e:
 
 
 # ==================================================
-# 출발역과 도착역 입력
+# 13. 전국 역 목록
+# ==================================================
+
+if "전국역자료" not in st.session_state:
+    st.session_state["전국역자료"] = None
+
+
+if "전국역오류" not in st.session_state:
+    st.session_state["전국역오류"] = ""
+
+
+with st.expander(
+    "🇰🇷 전국 지하철 역 이름 검색",
+    expanded=True
+):
+
+    st.subheader("전국 도시·광역철도 역 찾기")
+
+    st.write(
+        "역 이름을 몰라도 지역이나 노선을 선택해서 "
+        "전국의 역을 찾아볼 수 있어."
+    )
+
+    st.link_button(
+        "📥 국가철도공단 전국 역 목록 다운로드",
+        KRIC_URL,
+        use_container_width=True
+    )
+
+    st.caption(
+        "공식 자료를 내려받은 후 아래에 업로드해 줘."
+    )
+
+    업로드파일 = st.file_uploader(
+        "전국 역사정보 XLSX 또는 CSV 파일",
+        type=["xlsx", "xls", "csv"],
+        key="전국역파일"
+    )
+
+    if 업로드파일 is not None:
+
+        try:
+
+            파일내용 = 업로드파일.getvalue()
+
+            if 업로드파일.name.lower().endswith(".csv"):
+
+                try:
+
+                    원본 = pd.read_csv(
+                        BytesIO(파일내용),
+                        dtype=str,
+                        encoding="utf-8-sig"
+                    )
+
+                except UnicodeDecodeError:
+
+                    원본 = pd.read_csv(
+                        BytesIO(파일내용),
+                        dtype=str,
+                        encoding="cp949"
+                    )
+
+            else:
+
+                엑셀 = pd.ExcelFile(
+                    BytesIO(파일내용)
+                )
+
+                시트 = st.selectbox(
+                    "자료 시트 선택",
+                    엑셀.sheet_names,
+                    key="전국역시트"
+                )
+
+                원본 = pd.read_excel(
+                    BytesIO(파일내용),
+                    sheet_name=시트,
+                    dtype=str
+                )
+
+            새전국자료 = 전국역자료가공(
+                원본
+            )
+
+            st.session_state["전국역자료"] = (
+                새전국자료
+            )
+
+            st.session_state["전국역오류"] = ""
+
+        except Exception as e:
+
+            st.session_state["전국역오류"] = str(e)
+
+    if st.session_state["전국역오류"]:
+
+        st.error(
+            st.session_state["전국역오류"]
+        )
+
+    전국역자료 = st.session_state["전국역자료"]
+
+    if 전국역자료 is None:
+
+        st.info(
+            "공식 파일을 올리기 전에는 기존 길찾기 "
+            "데이터에 포함된 역만 목록으로 보여줘."
+        )
+
+        전국역자료 = pd.DataFrame([
+
+            {
+                "지역": "기존 경로 데이터",
+                "운영기관": "기존 데이터",
+                "노선": info["line"],
+                "역명": info["name"]
+            }
+
+            for info in 역정보.values()
+
+        ]).drop_duplicates()
+
+    st.divider()
+
+    # 지역 필터
+    지역목록 = sorted(
+        전국역자료["지역"].dropna().unique().tolist()
+    )
+
+    지역선택 = st.selectbox(
+        "📍 지역",
+        ["전체 지역"] + 지역목록,
+        key="전국지역선택"
+    )
+
+    # 운영기관 필터
+    기관목록 = sorted(
+        전국역자료["운영기관"].dropna().unique().tolist()
+    )
+
+    기관선택 = st.selectbox(
+        "🏢 운영기관",
+        ["전체 기관"] + 기관목록,
+        key="전국기관선택"
+    )
+
+    # 노선 필터
+    노선목록 = sorted(
+        전국역자료["노선"].dropna().unique().tolist()
+    )
+
+    노선선택 = st.selectbox(
+        "🚇 노선",
+        ["전체 노선"] + 노선목록,
+        key="전국노선선택"
+    )
+
+    # 역 이름 검색
+    역이름검색 = st.text_input(
+        "🔎 역 이름 검색",
+        placeholder="예: 강남, 부산대, 대전...",
+        key="전국역검색어"
+    )
+
+    검색결과 = 전국역자료.copy()
+
+    if 지역선택 != "전체 지역":
+
+        검색결과 = 검색결과[
+            검색결과["지역"] == 지역선택
+        ]
+
+    if 기관선택 != "전체 기관":
+
+        검색결과 = 검색결과[
+            검색결과["운영기관"] == 기관선택
+        ]
+
+    if 노선선택 != "전체 노선":
+
+        검색결과 = 검색결과[
+            검색결과["노선"] == 노선선택
+        ]
+
+    if 역이름검색.strip():
+
+        검색결과 = 검색결과[
+            검색결과["역명"].astype(str).str.contains(
+                역이름검색.strip(),
+                case=False,
+                na=False,
+                regex=False
+            )
+        ]
+
+    st.metric(
+        "검색된 역 항목",
+        f"{len(검색결과):,}개"
+    )
+
+    st.dataframe(
+        검색결과[
+            ["지역", "운영기관", "노선", "역명"]
+        ],
+        use_container_width=True,
+        height=330,
+        hide_index=True
+    )
+
+    st.download_button(
+        "📥 검색된 역 목록 CSV 저장",
+        data=검색결과.to_csv(
+            index=False
+        ).encode("utf-8-sig"),
+        file_name="전국_지하철역목록.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
+
+    # 역 선택
+    역선택지도 = {}
+
+    for _, row in 검색결과.iterrows():
+
+        이름 = str(row["역명"])
+
+        표시이름 = (
+            이름
+            if 이름.endswith("역")
+            else 이름 + "역"
+        )
+
+        표시 = (
+            f"{표시이름} | "
+            f"{row['노선']} | "
+            f"{row['지역']}"
+        )
+
+        역선택지도[표시] = 이름
+
+    역선택목록 = (
+        ["선택 안 함"]
+        + list(역선택지도.keys())
+    )
+
+    st.divider()
+
+    선택역 = st.selectbox(
+        "사용할 역 선택",
+        역선택목록,
+        key="전국역적용선택"
+    )
+
+    적용위치 = st.radio(
+        "어느 입력칸에 넣을까?",
+        ["출발역", "도착역"],
+        horizontal=True,
+        key="역적용위치"
+    )
+
+    if st.button(
+        "선택한 역 적용하기",
+        use_container_width=True
+    ):
+
+        if 선택역 != "선택 안 함":
+
+            if 적용위치 == "출발역":
+
+                st.session_state["출발역입력"] = (
+                    역선택지도[선택역]
+                )
+
+            else:
+
+                st.session_state["도착역입력"] = (
+                    역선택지도[선택역]
+                )
+
+            st.success(
+                "역을 입력했어. 아래에서 경로를 검색해 봐."
+            )
+
+            st.rerun()
+
+
+# ==================================================
+# 14. 최근 검색 및 편의 기능
+# ==================================================
+
+if "출발역입력" not in st.session_state:
+    st.session_state["출발역입력"] = ""
+
+if "도착역입력" not in st.session_state:
+    st.session_state["도착역입력"] = ""
+
+if "최근검색경로" not in st.session_state:
+    st.session_state["최근검색경로"] = []
+
+
+with st.expander("🕘 최근 검색 경로"):
+
+    최근기록 = st.session_state["최근검색경로"]
+
+    if 최근기록:
+
+        for i, 기록 in enumerate(최근기록):
+
+            st.write(
+                f"**{기록['출발']} → {기록['도착']}**"
+            )
+
+            if st.button(
+                "이 경로 다시 불러오기",
+                key=f"최근검색_{i}"
+            ):
+
+                st.session_state["출발역입력"] = 기록["출발"]
+
+                st.session_state["도착역입력"] = 기록["도착"]
+
+                st.session_state["경로기준"] = 기록["기준"]
+
+                st.rerun()
+
+    else:
+
+        st.caption(
+            "아직 검색한 경로가 없어."
+        )
+
+
+# 출발역·도착역 교환
+if st.button(
+    "↔️ 출발역과 도착역 바꾸기",
+    use_container_width=True
+):
+
+    임시 = st.session_state["출발역입력"]
+
+    st.session_state["출발역입력"] = (
+        st.session_state["도착역입력"]
+    )
+
+    st.session_state["도착역입력"] = 임시
+
+    st.rerun()
+
+
+# ==================================================
+# 15. 출발역과 도착역 입력
 # ==================================================
 
 with st.form("route_form"):
@@ -821,20 +1543,23 @@ with st.form("route_form"):
 
         출발입력 = st.text_input(
             "🔵 출발역",
-            placeholder="예: 강남역"
+            placeholder="예: 강남역",
+            key="출발역입력"
         )
 
     with col2:
 
         도착입력 = st.text_input(
             "🔹 도착역",
-            placeholder="예: 홍대입구역"
+            placeholder="예: 홍대입구역",
+            key="도착역입력"
         )
 
     기준 = st.radio(
         "경로 기준",
         ["최소 환승", "최단 역 수"],
-        horizontal=True
+        horizontal=True,
+        key="경로기준"
     )
 
     검색버튼 = st.form_submit_button(
@@ -844,11 +1569,11 @@ with st.form("route_form"):
 
 
 # ==================================================
-# 전체 노선도
+# 16. 전체 노선도
 # ==================================================
 
 with st.expander(
-    "🗺️ 전체 수도권 지하철 노선도 보기",
+    "🗺️ 현재 경로 데이터의 지하철 노선도",
     expanded=False
 ):
 
@@ -860,7 +1585,7 @@ with st.expander(
     선택노선 = st.selectbox(
         "확인할 노선",
         ["전체 노선"] + 노선목록,
-        key="전체노선도_선택"
+        key="노선도선택"
     )
 
     노선도그리기(
@@ -870,37 +1595,29 @@ with st.expander(
     )
 
     st.caption(
-        "지도를 마우스로 드래그해 이동하고, "
-        "휠을 움직여 확대·축소할 수 있어."
+        "마우스로 이동하고 휠로 확대하거나 축소할 수 있어."
     )
 
-    링크1, 링크2 = st.columns(2)
-
-    with 링크1:
-
-        st.link_button(
-            "서울교통공사 공식 사이버스테이션",
-            공식사이버스테이션,
-            use_container_width=True
-        )
-
-    with 링크2:
-
-        st.link_button(
-            "공식 수도권 노선도 자료",
-            공식노선도자료,
-            use_container_width=True
-        )
+    st.link_button(
+        "서울교통공사 공식 사이버스테이션",
+        공식사이버스테이션,
+        use_container_width=True
+    )
 
 
 # ==================================================
-# 결과 출력
+# 17. 경로 결과
 # ==================================================
 
 if 검색버튼:
 
-    출발키 = 역이름키(출발입력)
-    도착키 = 역이름키(도착입력)
+    출발키 = 역이름키(
+        출발입력
+    )
+
+    도착키 = 역이름키(
+        도착입력
+    )
 
     if (
         not 출발입력.strip()
@@ -920,13 +1637,23 @@ if 검색버튼:
     elif 출발키 not in 역검색표:
 
         st.error(
-            f"'{출발입력}' 역을 데이터에서 찾을 수 없어."
+            f"'{출발입력}' 역은 현재 경로 계산 데이터에 없어."
+        )
+
+        st.caption(
+            "전국 역 목록에 표시된다고 해서 "
+            "모든 지역의 경로 계산이 가능한 것은 아니야."
         )
 
     elif 도착키 not in 역검색표:
 
         st.error(
-            f"'{도착입력}' 역을 데이터에서 찾을 수 없어."
+            f"'{도착입력}' 역은 현재 경로 계산 데이터에 없어."
+        )
+
+        st.caption(
+            "전국 역 목록에 표시된다고 해서 "
+            "모든 지역의 경로 계산이 가능한 것은 아니야."
         )
 
     else:
@@ -945,6 +1672,31 @@ if 검색버튼:
             )
 
         else:
+
+            # 최근 검색 기록 저장
+            새기록 = {
+                "출발": 출발입력.strip(),
+                "도착": 도착입력.strip(),
+                "기준": 기준
+            }
+
+            최근기록 = [
+                기록
+                for 기록 in st.session_state["최근검색경로"]
+                if not (
+                    기록["출발"] == 새기록["출발"]
+                    and 기록["도착"] == 새기록["도착"]
+                )
+            ]
+
+            최근기록.insert(
+                0,
+                새기록
+            )
+
+            st.session_state["최근검색경로"] = (
+                최근기록[:5]
+            )
 
             구간들 = 구간나누기(
                 경로,
@@ -969,6 +1721,7 @@ if 검색버튼:
             # ------------------------------
 
             st.divider()
+
             st.subheader("🧭 이동 경로")
 
             st.markdown(
@@ -1065,15 +1818,15 @@ if 검색버튼:
                     )
 
             음성문장.append(
-                f"{역이름표시(경로[-1], 역정보)}에 "
-                f"도착했습니다."
+                f"{역이름표시(경로[-1], 역정보)}에 도착했습니다."
             )
 
             # ------------------------------
-            # 전체 정차역
+            # 전체 이동 순서
             # ------------------------------
 
             st.divider()
+
             st.subheader("📍 전체 이동 순서")
 
             전체역목록 = []
@@ -1093,7 +1846,9 @@ if 검색버튼:
                     ):
                         continue
 
-                전체역목록.append(이름)
+                전체역목록.append(
+                    이름
+                )
 
             with st.container(border=True):
 
@@ -1107,11 +1862,14 @@ if 검색버튼:
                     )
 
             # ------------------------------
-            # 내 경로 지도
+            # 내 이동 지도
             # ------------------------------
 
             st.divider()
-            st.subheader("📍 지도에서 내 이동 경로 보기")
+
+            st.subheader(
+                "📍 지도에서 내 이동 경로 보기"
+            )
 
             노선도그리기(
                 역정보,
@@ -1121,8 +1879,7 @@ if 검색버튼:
             )
 
             st.caption(
-                "붉은 선이 검색한 이동 경로야. "
-                "지도를 드래그하거나 확대·축소해서 확인해 봐."
+                "빨간 선이 검색한 이동 경로야."
             )
 
             # ------------------------------
@@ -1130,6 +1887,7 @@ if 검색버튼:
             # ------------------------------
 
             st.divider()
+
             st.subheader("🗺️ 네이버 지도")
 
             네이버URL = 네이버지도경로URL(
@@ -1149,8 +1907,7 @@ if 검색버튼:
             else:
 
                 st.warning(
-                    "역 좌표를 확인할 수 없어 "
-                    "네이버 지도 경로 링크를 만들지 못했어."
+                    "역 좌표를 확인할 수 없어."
                 )
 
             # ------------------------------
@@ -1158,9 +1915,12 @@ if 검색버튼:
             # ------------------------------
 
             st.divider()
+
             st.subheader("🔊 음성 안내")
 
-            음성텍스트 = " ".join(음성문장)
+            음성텍스트 = " ".join(
+                음성문장
+            )
 
             음성문장JS = json.dumps(
                 음성텍스트,
@@ -1174,6 +1934,7 @@ if 검색버튼:
                     gap:10px;
                     width:100%;
                 ">
+
                     <button id="speakBtn"
                         style="
                             flex:1;
@@ -1205,6 +1966,7 @@ if 검색버튼:
                         ">
                         ■ 정지
                     </button>
+
                 </div>
 
                 <div id="voiceStatus"
@@ -1218,6 +1980,7 @@ if 검색버튼:
                 </div>
 
                 <script>
+
                     const routeText = {음성문장JS};
 
                     const speakBtn =
@@ -1232,15 +1995,16 @@ if 검색버튼:
                     let chunks = [];
                     let currentChunk = 0;
 
-                    // 한국어 문장 단위로 나누기
                     function makeChunks(text) {{
 
-                        return text.match(/[^.!?。]+[.!?。]?/g)
-                            ?.map(s => s.trim())
-                            .filter(Boolean) || [text];
+                        return text.match(
+                            /[^.!?。]+[.!?。]?/g
+                        )
+                        ?.map(s => s.trim())
+                        .filter(Boolean) || [text];
+
                     }}
 
-                    // 한국어 음성 찾기
                     function getKoreanVoice() {{
 
                         const voices =
@@ -1259,9 +2023,9 @@ if 검색버튼:
 
                             null
                         );
+
                     }}
 
-                    // 다음 문장 재생
                     function speakNext() {{
 
                         if (currentChunk >= chunks.length) {{
@@ -1277,7 +2041,8 @@ if 검색버튼:
                                 chunks[currentChunk]
                             );
 
-                        const voice = getKoreanVoice();
+                        const voice =
+                            getKoreanVoice();
 
                         if (voice) {{
                             speech.voice = voice;
@@ -1295,27 +2060,34 @@ if 검색버튼:
                                 (currentChunk + 1) +
                                 " / " +
                                 chunks.length;
+
                         }};
 
                         speech.onend = function() {{
 
                             currentChunk++;
                             speakNext();
+
                         }};
 
                         speech.onerror = function() {{
 
                             voiceStatus.textContent =
                                 "음성 재생에 실패했어. 다시 눌러줘.";
+
                         }};
 
-                        window.speechSynthesis.speak(speech);
+                        window.speechSynthesis.speak(
+                            speech
+                        );
+
                     }}
 
-                    // 음성 시작
                     speakBtn.onclick = function() {{
 
-                        if (!("speechSynthesis" in window)) {{
+                        if (
+                            !("speechSynthesis" in window)
+                        ) {{
 
                             voiceStatus.textContent =
                                 "현재 브라우저에서 음성 기능을 지원하지 않아.";
@@ -1324,45 +2096,58 @@ if 검색버튼:
                         }}
 
                         window.speechSynthesis.cancel();
+
                         window.speechSynthesis.getVoices();
 
                         chunks = makeChunks(routeText);
+
                         currentChunk = 0;
 
                         setTimeout(function() {{
+
                             speakNext();
+
                         }}, 150);
+
                     }};
 
-                    // 음성 정지
-                    stopBtn.onclick = function() {{
+                    stopBtn.onclick = function(){{
 
-                        if ("speechSynthesis" in window) {{
+                        if (
+                            "speechSynthesis" in window
+                        ) {{
 
                             window.speechSynthesis.cancel();
+
                         }}
 
                         currentChunk = chunks.length;
 
                         voiceStatus.textContent =
                             "음성 안내를 정지했어.";
+
                     }};
 
-                    // 음성 목록 불러오기
-                    if ("speechSynthesis" in window) {{
+                    if (
+                        "speechSynthesis" in window
+                    ) {{
 
                         window.speechSynthesis.onvoiceschanged =
-                            function() {{
+                            function(){{
 
                                 window.speechSynthesis.getVoices();
+
                             }};
 
                         window.speechSynthesis.getVoices();
+
                     }}
+
                 </script>
                 """,
                 height=125
             )
+
 
 else:
 
