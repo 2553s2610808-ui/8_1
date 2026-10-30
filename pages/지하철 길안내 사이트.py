@@ -5,6 +5,7 @@ import heapq
 import re
 import json
 import math
+import pydeck as pdk
 from urllib.parse import quote
 from io import StringIO
 from itertools import combinations
@@ -32,6 +33,51 @@ SECTION_URL = (
     "main/data/subway_section.csv"
 )
 
+공식사이버스테이션 = (
+    "https://www.seoulmetro.co.kr/kr/cyberStation.do"
+)
+
+공식노선도자료 = (
+    "https://data.seoul.go.kr/dataList/OA-22535/F/1/datasetView.do"
+)
+
+# 노선별 지도 색상
+노선색상표 = {
+    "1호선": [0, 72, 152],
+    "2호선": [0, 162, 98],
+    "3호선": [255, 119, 0],
+    "4호선": [0, 166, 220],
+    "5호선": [153, 102, 204],
+    "6호선": [205, 153, 0],
+    "7호선": [105, 92, 170],
+    "8호선": [232, 0, 58],
+    "9호선": [178, 168, 153],
+    "신분당선": [200, 0, 50],
+    "수인분당선": [255, 205, 0],
+    "경의중앙선": [119, 198, 161],
+    "공항철도": [0, 161, 216],
+    "경춘선": [0, 192, 198],
+    "우이신설선": [182, 165, 210],
+    "서해선": [138, 158, 166],
+    "신림선": [103, 173, 70],
+    "경강선": [0, 159, 214],
+    "김포골드라인": [170, 160, 140],
+    "의정부경전철": [255, 190, 0],
+    "용인경전철": [80, 180, 80],
+    "에버라인": [80, 180, 80],
+}
+
+
+def 노선색상(노선):
+    노선문자 = str(노선).replace(" ", "")
+
+    for 이름, 색상 in 노선색상표.items():
+        if 이름 in 노선문자:
+            return 색상
+
+    return [40, 120, 190]
+
+
 # ==================================================
 # 파란색 디자인
 # ==================================================
@@ -44,7 +90,7 @@ st.markdown("""
 }
 
 .block-container {
-    max-width: 1000px;
+    max-width: 1100px;
     padding-top: 30px;
     padding-bottom: 50px;
 }
@@ -118,10 +164,7 @@ def 역이름표시(node, 역정보):
     if not 이름 or 이름.isdigit():
         return "역 이름 확인 필요"
 
-    if 이름 == "서울":
-        return "서울역"
-
-    if 이름 == "서울역":
+    if 이름 in ("서울", "서울역"):
         return "서울역"
 
     if 이름.endswith("역"):
@@ -165,7 +208,7 @@ def 두역거리(a, b):
 
 
 # ==================================================
-# 네이버 지도 URL
+# 네이버 지도
 # ==================================================
 
 def 네이버지도용좌표(lat, lng):
@@ -254,7 +297,6 @@ def 데이터불러오기():
     역코드표 = {}
     노선별역표 = {}
 
-    # 역 정보
     for row in 역자료.to_dict("records"):
 
         node = row.get("station_id", "").strip()
@@ -293,11 +335,12 @@ def 데이터불러오기():
             []
         ).append(node)
 
-    # 역 연결 그래프
     그래프 = {
         node: set()
         for node in 역정보
     }
+
+    노선도구간 = []
 
     def 연결(a, b, 이동수=1, 환승수=0):
 
@@ -360,7 +403,38 @@ def 데이터불러오기():
                 b = candidates[0]
 
         if a and b:
+
             연결(a, b, 1, 0)
+
+            정보_a = 역정보[a]
+            정보_b = 역정보[b]
+
+            if all(
+                값 is not None
+                for 값 in (
+                    정보_a["lat"],
+                    정보_a["lng"],
+                    정보_b["lat"],
+                    정보_b["lng"]
+                )
+            ):
+
+                노선도구간.append({
+                    "line": line,
+
+                    "path": [
+                        [
+                            정보_a["lng"],
+                            정보_a["lat"]
+                        ],
+                        [
+                            정보_b["lng"],
+                            정보_b["lat"]
+                        ]
+                    ],
+
+                    "color": 노선색상(line)
+                })
 
     # 환승 연결
     이름별노드 = {}
@@ -393,7 +467,198 @@ def 데이터불러오기():
         for key, nodes in 이름별노드.items()
     }
 
-    return 역정보, 그래프, 역검색표
+    return 역정보, 그래프, 역검색표, 노선도구간
+
+
+# ==================================================
+# 지하철 노선도 그리기
+# ==================================================
+
+def 노선도그리기(
+    역정보,
+    노선도구간,
+    선택노선="전체 노선",
+    강조경로=None
+):
+
+    if 선택노선 == "전체 노선":
+
+        표시구간 = 노선도구간
+
+    else:
+
+        표시구간 = [
+            구간 for 구간 in 노선도구간
+            if 구간["line"] == 선택노선
+        ]
+
+    if not 표시구간:
+
+        st.warning("표시할 노선 좌표가 없어.")
+        return
+
+    # 역 점 데이터
+    역점목록 = []
+
+    for node, info in 역정보.items():
+
+        if (
+            info["lat"] is None
+            or info["lng"] is None
+        ):
+            continue
+
+        if (
+            선택노선 != "전체 노선"
+            and info["line"] != 선택노선
+        ):
+            continue
+
+        역점목록.append({
+            "position": [
+                info["lng"],
+                info["lat"]
+            ],
+            "name": 역이름표시(node, 역정보),
+            "line": info["line"]
+        })
+
+    layers = [
+
+        # 노선 선
+        pdk.Layer(
+            "PathLayer",
+            data=표시구간,
+            get_path="path",
+            get_color="color",
+            get_width=4,
+            width_scale=1,
+            width_min_pixels=2,
+            pickable=True
+        ),
+
+        # 역 위치
+        pdk.Layer(
+            "ScatterplotLayer",
+            data=역점목록,
+            get_position="position",
+            get_radius=35,
+            radius_min_pixels=2,
+            radius_max_pixels=5,
+            get_fill_color=[255, 255, 255],
+            get_line_color=[30, 80, 140],
+            line_width_min_pixels=1,
+            stroked=True,
+            filled=True,
+            pickable=True
+        )
+    ]
+
+    # 현재 검색한 경로를 붉은 선으로 강조
+    if 강조경로:
+
+        경로좌표 = []
+
+        for node in 강조경로:
+
+            info = 역정보.get(str(node))
+
+            if (
+                info
+                and info["lat"] is not None
+                and info["lng"] is not None
+            ):
+
+                경로좌표.append([
+                    info["lng"],
+                    info["lat"]
+                ])
+
+        if len(경로좌표) >= 2:
+
+            layers.append(
+                pdk.Layer(
+                    "PathLayer",
+                    data=[{"path": 경로좌표}],
+                    get_path="path",
+                    get_color=[239, 68, 68],
+                    get_width=8,
+                    width_scale=1,
+                    width_min_pixels=4,
+                    pickable=False
+                )
+            )
+
+    # 지도 중심 계산
+    if 강조경로:
+
+        중심좌표 = [
+            역정보[str(node)]
+            for node in 강조경로
+            if str(node) in 역정보
+            and 역정보[str(node)]["lat"] is not None
+            and 역정보[str(node)]["lng"] is not None
+        ]
+
+    else:
+
+        중심좌표 = [
+            info for info in 역정보.values()
+            if info["lat"] is not None
+            and info["lng"] is not None
+        ]
+
+    if 중심좌표:
+
+        중심위도 = sum(
+            x["lat"] for x in 중심좌표
+        ) / len(중심좌표)
+
+        중심경도 = sum(
+            x["lng"] for x in 중심좌표
+        ) / len(중심좌표)
+
+    else:
+
+        중심위도 = 37.5665
+        중심경도 = 126.9780
+
+    zoom = (
+        10.2
+        if 선택노선 == "전체 노선"
+        else 11.2
+    )
+
+    if 강조경로 and len(강조경로) > 15:
+        zoom = 9.8
+
+    deck = pdk.Deck(
+        layers=layers,
+
+        initial_view_state=pdk.ViewState(
+            latitude=중심위도,
+            longitude=중심경도,
+            zoom=zoom,
+            pitch=0,
+            bearing=0
+        ),
+
+        map_style="light",
+
+        tooltip={
+            "html": "<b>{name}</b><br/>{line}",
+            "style": {
+                "backgroundColor": "#123B72",
+                "color": "white"
+            }
+        }
+    )
+
+    st.pydeck_chart(
+        deck,
+        use_container_width=True,
+        height=560
+    )
 
 
 # ==================================================
@@ -518,22 +783,17 @@ def 구간나누기(경로, 역정보):
 
 
 # ==================================================
-# 화면 제목
+# 화면 제목 및 데이터 불러오기
 # ==================================================
 
 st.title("🚇 BLUE ROUTE")
 st.caption("파란색 테마의 지하철 길찾기")
 
-
-# ==================================================
-# 데이터 불러오기
-# ==================================================
-
 try:
 
     with st.spinner("지하철 정보를 불러오는 중..."):
 
-        역정보, 그래프, 역검색표 = 데이터불러오기()
+        역정보, 그래프, 역검색표, 노선도구간 = 데이터불러오기()
 
 except Exception as e:
 
@@ -581,6 +841,56 @@ with st.form("route_form"):
         "🔎 경로 찾기",
         use_container_width=True
     )
+
+
+# ==================================================
+# 전체 노선도
+# ==================================================
+
+with st.expander(
+    "🗺️ 전체 수도권 지하철 노선도 보기",
+    expanded=False
+):
+
+    노선목록 = sorted({
+        구간["line"]
+        for 구간 in 노선도구간
+    })
+
+    선택노선 = st.selectbox(
+        "확인할 노선",
+        ["전체 노선"] + 노선목록,
+        key="전체노선도_선택"
+    )
+
+    노선도그리기(
+        역정보,
+        노선도구간,
+        선택노선=선택노선
+    )
+
+    st.caption(
+        "지도를 마우스로 드래그해 이동하고, "
+        "휠을 움직여 확대·축소할 수 있어."
+    )
+
+    링크1, 링크2 = st.columns(2)
+
+    with 링크1:
+
+        st.link_button(
+            "서울교통공사 공식 사이버스테이션",
+            공식사이버스테이션,
+            use_container_width=True
+        )
+
+    with 링크2:
+
+        st.link_button(
+            "공식 수도권 노선도 자료",
+            공식노선도자료,
+            use_container_width=True
+        )
 
 
 # ==================================================
@@ -797,6 +1107,25 @@ if 검색버튼:
                     )
 
             # ------------------------------
+            # 내 경로 지도
+            # ------------------------------
+
+            st.divider()
+            st.subheader("📍 지도에서 내 이동 경로 보기")
+
+            노선도그리기(
+                역정보,
+                노선도구간,
+                선택노선="전체 노선",
+                강조경로=경로
+            )
+
+            st.caption(
+                "붉은 선이 검색한 이동 경로야. "
+                "지도를 드래그하거나 확대·축소해서 확인해 봐."
+            )
+
+            # ------------------------------
             # 네이버 지도
             # ------------------------------
 
@@ -817,16 +1146,11 @@ if 검색버튼:
                     use_container_width=True
                 )
 
-                st.caption(
-                    "네이버 지도에서 출발역과 도착역의 "
-                    "대중교통 경로를 크게 볼 수 있어."
-                )
-
             else:
 
                 st.warning(
-                    "역 좌표를 확인할 수 없어서 "
-                    "네이버 지도 링크를 만들지 못했어."
+                    "역 좌표를 확인할 수 없어 "
+                    "네이버 지도 경로 링크를 만들지 못했어."
                 )
 
             # ------------------------------
@@ -908,43 +1232,12 @@ if 검색버튼:
                     let chunks = [];
                     let currentChunk = 0;
 
-                    // 긴 문장을 나눠서 재생
+                    // 한국어 문장 단위로 나누기
                     function makeChunks(text) {{
 
-                        const sentences = text.split(
-                            /(?<=[.!?])\\s+/
-                        );
-
-                        const result = [];
-                        let current = "";
-
-                        for (const sentence of sentences) {{
-
-                            if (
-                                (current + " " + sentence)
-                                .trim().length > 180
-                            ) {{
-
-                                if (current.trim()) {{
-                                    result.push(current.trim());
-                                }}
-
-                                current = sentence;
-
-                            }} else {{
-
-                                current = (
-                                    current + " " + sentence
-                                ).trim();
-
-                            }}
-                        }}
-
-                        if (current.trim()) {{
-                            result.push(current.trim());
-                        }}
-
-                        return result;
+                        return text.match(/[^.!?。]+[.!?。]?/g)
+                            ?.map(s => s.trim())
+                            .filter(Boolean) || [text];
                     }}
 
                     // 한국어 음성 찾기
@@ -964,7 +1257,7 @@ if 검색버튼:
                                 v.lang.toLowerCase().startsWith("ko")
                             ) ||
 
-                            voices[0]
+                            null
                         );
                     }}
 
@@ -1002,26 +1295,21 @@ if 검색버튼:
                                 (currentChunk + 1) +
                                 " / " +
                                 chunks.length;
-
                         }};
 
                         speech.onend = function() {{
 
                             currentChunk++;
                             speakNext();
-
                         }};
 
                         speech.onerror = function() {{
 
                             voiceStatus.textContent =
                                 "음성 재생에 실패했어. 다시 눌러줘.";
-
                         }};
 
-                        window.speechSynthesis.speak(
-                            speech
-                        );
+                        window.speechSynthesis.speak(speech);
                     }}
 
                     // 음성 시작
@@ -1036,13 +1324,14 @@ if 검색버튼:
                         }}
 
                         window.speechSynthesis.cancel();
+                        window.speechSynthesis.getVoices();
 
                         chunks = makeChunks(routeText);
                         currentChunk = 0;
 
                         setTimeout(function() {{
                             speakNext();
-                        }}, 100);
+                        }}, 150);
                     }};
 
                     // 음성 정지
@@ -1051,7 +1340,6 @@ if 검색버튼:
                         if ("speechSynthesis" in window) {{
 
                             window.speechSynthesis.cancel();
-
                         }}
 
                         currentChunk = chunks.length;
@@ -1060,38 +1348,21 @@ if 검색버튼:
                             "음성 안내를 정지했어.";
                     }};
 
-                    // 브라우저 음성 목록 불러오기
+                    // 음성 목록 불러오기
                     if ("speechSynthesis" in window) {{
 
                         window.speechSynthesis.onvoiceschanged =
                             function() {{
 
                                 window.speechSynthesis.getVoices();
-
                             }};
+
+                        window.speechSynthesis.getVoices();
                     }}
                 </script>
                 """,
                 height=125
             )
-
-            # ------------------------------
-            # 주의 사항
-            # ------------------------------
-
-            with st.expander("경로 안내 주의 사항"):
-
-                st.write(
-                    "역 코드는 내부 경로 계산에만 사용하고, "
-                    "화면에는 한글 역 이름을 표시해."
-                )
-
-                st.write(
-                    "경로 정확도는 공개 데이터의 역 연결 정보에 "
-                    "따라 달라질 수 있어. "
-                    "실시간 열차 운행이나 급행 정보는 "
-                    "반영되지 않을 수 있어."
-                )
 
 else:
 
