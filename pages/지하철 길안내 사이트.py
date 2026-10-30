@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import requests
-import heapq약간
+import heapq
 import re
 import json
 import math
