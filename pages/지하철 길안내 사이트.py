@@ -1,920 +1,667 @@
-import heapq
-import json
-import math
-import re
-from io import StringIO
-
-import pandas as pd
-import requests
 import streamlit as st
 import streamlit.components.v1 as components
+import pandas as pd
+import requests
+import heapq
+import re
+import math
+import json
+from io import StringIO
+from itertools import combinations
 
-
-# =========================================================
+# ==================================================
 # 기본 설정
-# =========================================================
+# ==================================================
+
 st.set_page_config(
     page_title="BLUE ROUTE | 지하철 길찾기",
     page_icon="🚇",
-    layout="wide",
-    initial_sidebar_state="collapsed",
+    layout="wide"
 )
 
-STATION_URL = "https://raw.githubusercontent.com/minseok852/subway-etl/main/output/station_nodes.csv"
-EDGE_URL = "https://raw.githubusercontent.com/minseok852/subway-etl/main/output/station_edges.csv"
+STATION_URL = (
+    "https://raw.githubusercontent.com/"
+    "JoeYunHa/korea_seoul_subway_static_data/"
+    "main/data/subway_station.csv"
+)
 
-HEADERS = {"User-Agent": "BlueRoute-Streamlit/1.0"}
+SECTION_URL = (
+    "https://raw.githubusercontent.com/"
+    "JoeYunHa/korea_seoul_subway_static_data/"
+    "main/data/subway_section.csv"
+)
 
-LINE_NAMES = {
-    "1": "1호선", "2": "2호선", "3": "3호선", "4": "4호선",
-    "5": "5호선", "6": "6호선", "7": "7호선", "8": "8호선",
-    "9": "9호선", "B": "수인분당선", "S": "신분당선",
-    "K": "경의·중앙선", "A": "공항철도", "G": "경춘선",
-    "U": "의정부경전철", "E": "용인에버라인", "KK": "경강선",
-    "W": "우이신설선", "SH": "서해선", "KP": "김포골드라인",
-    "I": "인천1호선", "I2": "인천2호선", "GTXA": "GTX-A",
-    "N": "신림선", "M": "인천공항 자기부상철도",
-}
-
-LINE_COLORS = {
-    "1": "#0052A4", "2": "#00A84D", "3": "#EF7C1C",
-    "4": "#00A5DE", "5": "#996CAC", "6": "#CD7C2F",
-    "7": "#747F00", "8": "#E6186C", "9": "#BDB092",
-    "B": "#F5A200", "S": "#D31145", "K": "#77C4A3",
-    "A": "#0090D2", "G": "#178C72", "U": "#B7C450",
-    "E": "#FFCD00", "KK": "#003DA5", "W": "#B7B7B7",
-    "SH": "#F06A00", "KP": "#8B50A4", "I": "#759C2A",
-    "I2": "#F5A100", "GTXA": "#3B82F6", "N": "#B0CE18",
-    "M": "#777777",
-}
-
-
-def 노선이름(line_key):
-    return LINE_NAMES.get(str(line_key), f"{line_key} 노선")
-
-
-def 노선색(line_key):
-    return LINE_COLORS.get(str(line_key), "#2563EB")
-
-
-# =========================================================
+# ==================================================
 # 파란색 디자인
-# =========================================================
-st.markdown(
-    """
-    <style>
-    .stApp {
-        background: linear-gradient(180deg, #F2F7FF 0%, #F8FBFF 100%);
-        color: #172554;
-    }
-    .block-container {
-        max-width: 1050px;
-        padding-top: 28px;
-        padding-bottom: 48px;
-    }
-    .hero {
-        padding: 30px 32px;
-        border-radius: 24px;
-        background: linear-gradient(120deg, #102A56 0%, #1768C4 62%, #38BDF8 100%);
-        color: white;
-        margin-bottom: 24px;
-        box-shadow: 0 12px 28px rgba(29, 78, 216, .15);
-    }
-    .hero-title {
-        color: white;
-        font-size: 35px;
-        font-weight: 900;
-        letter-spacing: -1px;
-    }
-    .hero-subtitle {
-        color: #DBEEFF;
-        font-size: 14px;
-        line-height: 1.7;
-        margin-top: 8px;
-    }
-    h1, h2, h3 {
-        color: #123B72;
-    }
-    div[data-testid="stTextInput"] input {
-        border: 1px solid #BFDBFE;
-        border-radius: 12px;
-        min-height: 48px;
-        background: white;
-        color: #172554;
-    }
-    div[data-testid="stFormSubmitButton"] button {
-        background: linear-gradient(90deg, #1D4ED8, #0284C7);
-        border: none;
-        border-radius: 12px;
-        color: white;
-        font-size: 16px;
-        font-weight: 800;
-        min-height: 50px;
-    }
-    div[data-testid="stMetric"] {
-        background: white;
-        border: 1px solid #BFDBFE;
-        border-radius: 15px;
-        padding: 10px;
-    }
-    div[data-testid="stMetricLabel"] {
-        color: #64748B;
-    }
-    .route-heading {
-        color: #123B72;
-        font-size: 24px;
-        font-weight: 900;
-        padding: 20px;
-        border-radius: 16px;
-        background: linear-gradient(120deg, #DBEAFE, #E0F2FE);
-        border: 1px solid #BFDBFE;
-        margin: 12px 0 18px 0;
-    }
-    .transfer-note {
-        background: #E0F2FE;
-        border-left: 5px solid #0284C7;
-        border-radius: 10px;
-        padding: 12px 15px;
-        margin: 8px 0 14px 0;
-        color: #075985;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+# ==================================================
+
+st.markdown("""
+<style>
+.stApp {
+    background: #F1F7FF;
+    color: #172554;
+}
+
+.block-container {
+    max-width: 1000px;
+    padding-top: 30px;
+    padding-bottom: 50px;
+}
+
+h1, h2, h3 {
+    color: #123B72;
+}
+
+.hero {
+    padding: 32px;
+    border-radius: 24px;
+    background: linear-gradient(
+        120deg,
+        #102A56 0%,
+        #1768C4 60%,
+        #38BDF8 100%
+    );
+    color: white;
+    margin-bottom: 25px;
+}
+
+.hero-title {
+    color: white;
+    font-size: 36px;
+    font-weight: 800;
+}
+
+.hero-subtitle {
+    color: #DBEEFF;
+    margin-top: 8px;
+}
+
+div[data-testid="stTextInput"] input {
+    border: 1px solid #BFDBFE;
+    border-radius: 12px;
+    min-height: 48px;
+    background: white;
+    color: #172554;
+}
+
+div[data-testid="stFormSubmitButton"] button {
+    background: linear-gradient(90deg, #1D4ED8, #0284C7);
+    border: none;
+    border-radius: 12px;
+    color: white;
+    font-size: 16px;
+    font-weight: 800;
+    min-height: 50px;
+}
+
+div[data-testid="stMetric"] {
+    background: white;
+    border: 1px solid #BFDBFE;
+    border-radius: 15px;
+}
+
+.route-box {
+    background: linear-gradient(120deg, #DBEAFE, #E0F2FE);
+    border: 1px solid #BFDBFE;
+    border-radius: 18px;
+    padding: 22px;
+    margin: 20px 0;
+}
+
+.route-title {
+    color: #123B72;
+    font-size: 25px;
+    font-weight: 800;
+}
+
+.station-box {
+    background: white;
+    border: 1px solid #BFDBFE;
+    border-radius: 16px;
+    padding: 18px;
+    margin: 12px 0;
+}
+
+.line-title {
+    color: #1D4ED8;
+    font-size: 19px;
+    font-weight: 800;
+}
+
+.station-text {
+    color: #1E3A8A;
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 2;
+}
+
+.transfer-box {
+    background: #E0F2FE;
+    border-left: 5px solid #0284C7;
+    border-radius: 12px;
+    padding: 15px;
+    margin: 12px 0;
+    color: #075985;
+}
+
+hr {
+    border-color: #DBEAFE;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ==================================================
+# 역 이름 처리
+# ==================================================
+
+def 역이름키(이름):
+
+    이름 = re.sub(r"\s+", "", str(이름))
+
+    if 이름 in ("서울", "서울역"):
+        return "서울역"
+
+    if 이름.endswith("역") and len(이름) > 1:
+        이름 = 이름[:-1]
+
+    return 이름
 
 
-# =========================================================
-# 역 이름 정리
-# 띄어쓰기와 끝의 '역'만 정리
-# 비슷한 역 검색 및 자동 추천 없음
-# =========================================================
-def 역이름키(name):
-    value = re.sub(r"\s+", "", str(name or "").strip())
+def 역이름표시(node, 역정보):
 
-    if value.endswith("역"):
-        value = value[:-1]
+    정보 = 역정보.get(str(node))
 
-    return value
+    if not 정보:
+        return "역 이름 확인 필요"
+
+    이름 = str(정보.get("name", "")).strip()
+
+    if not 이름 or 이름.isdigit():
+        return "역 이름 확인 필요"
+
+    if 이름 == "서울":
+        return "서울역"
+
+    if not 이름.endswith("역"):
+        이름 += "역"
+
+    return 이름
 
 
-def 역이름표시(node_id, nodes):
-    name = nodes[str(node_id)]["name"]
+# ==================================================
+# 역 거리 계산
+# ==================================================
 
-    return name if name.endswith("역") else f"{name}역"
+def 두역거리(a, b):
 
-
-def 두지점거리_km(info_a, info_b):
-
-    if None in (
-        info_a["lat"],
-        info_a["lon"],
-        info_b["lat"],
-        info_b["lon"]
+    if (
+        a["lat"] is None
+        or a["lng"] is None
+        or b["lat"] is None
+        or b["lng"] is None
     ):
         return float("inf")
 
-    radius = 6371.0
+    R = 6371000
 
-    lat1 = math.radians(info_a["lat"])
-    lat2 = math.radians(info_b["lat"])
+    lat1 = math.radians(a["lat"])
+    lat2 = math.radians(b["lat"])
 
-    dlat = lat2 - lat1
-    dlon = math.radians(
-        info_b["lon"] - info_a["lon"]
+    dlat = math.radians(
+        b["lat"] - a["lat"]
     )
 
-    value = (
+    dlng = math.radians(
+        b["lng"] - a["lng"]
+    )
+
+    x = (
         math.sin(dlat / 2) ** 2
         + math.cos(lat1)
         * math.cos(lat2)
-        * math.sin(dlon / 2) ** 2
+        * math.sin(dlng / 2) ** 2
     )
 
-    return 2 * radius * math.asin(
-        min(1, math.sqrt(value))
+    return (
+        2
+        * R
+        * math.asin(
+            min(1, math.sqrt(x))
+        )
     )
 
 
-# =========================================================
-# 지하철 데이터 불러오기
-# =========================================================
-@st.cache_data(ttl=86400, show_spinner=False)
+# ==================================================
+# 데이터 불러오기
+# ==================================================
+
+@st.cache_data(ttl=86400)
 def 데이터불러오기():
 
-    station_response = requests.get(
-        STATION_URL,
-        headers=HEADERS,
-        timeout=30
-    )
+    def csv읽기(url):
 
-    station_response.raise_for_status()
-
-    edge_response = requests.get(
-        EDGE_URL,
-        headers=HEADERS,
-        timeout=30
-    )
-
-    edge_response.raise_for_status()
-
-    station_df = pd.read_csv(
-        StringIO(
-            station_response.content.decode("utf-8-sig")
-        ),
-        dtype=str,
-        keep_default_na=False
-    )
-
-    edge_df = pd.read_csv(
-        StringIO(
-            edge_response.content.decode("utf-8-sig")
-        ),
-        dtype=str,
-        keep_default_na=False
-    )
-
-    station_required = {
-        "id",
-        "station_name",
-        "line_key",
-        "lat",
-        "lon"
-    }
-
-    edge_required = {
-        "from_node_id",
-        "to_node_id",
-        "seconds",
-        "edge_type"
-    }
-
-    if not station_required.issubset(station_df.columns):
-        raise ValueError(
-            "역 데이터의 열 이름이 예상한 형식과 달라."
+        response = requests.get(
+            url,
+            timeout=30,
+            headers={
+                "User-Agent": "BlueRoute/1.0"
+            }
         )
 
-    if not edge_required.issubset(edge_df.columns):
-        raise ValueError(
-            "구간 데이터의 열 이름이 예상한 형식과 달라."
+        response.raise_for_status()
+
+        return pd.read_csv(
+            StringIO(
+                response.content.decode("utf-8-sig")
+            ),
+            dtype=str,
+            keep_default_na=False
         )
 
-    nodes = {}
-    station_index = {}
+    역자료 = csv읽기(STATION_URL)
+    구간자료 = csv읽기(SECTION_URL)
 
-    for row in station_df.to_dict("records"):
+    역정보 = {}
+    역코드표 = {}
+    노선별역표 = {}
 
-        node_id = str(row["id"]).strip()
-        name = str(row["station_name"]).strip()
-        line_key = str(row["line_key"]).strip()
+    # ----------------------------------------------
+    # 역 정보
+    # ----------------------------------------------
 
-        if not node_id or not name or not line_key:
+    for row in 역자료.to_dict("records"):
+
+        node = row.get(
+            "station_id",
+            ""
+        ).strip()
+
+        line = row.get(
+            "line",
+            ""
+        ).strip()
+
+        name = row.get(
+            "name",
+            ""
+        ).strip()
+
+        code = row.get(
+            "station_cd",
+            ""
+        ).strip()
+
+        if not node or not line or not name:
             continue
 
         try:
-            lat = float(row["lat"])
-            lon = float(row["lon"])
+            lat = float(row.get("lat", ""))
+            lng = float(row.get("lng", ""))
+        except:
+            lat = None
+            lng = None
 
-        except (TypeError, ValueError):
-            lat, lon = None, None
-
-        nodes[node_id] = {
+        역정보[node] = {
+            "line": line,
             "name": name,
-            "line_key": line_key,
-            "line": 노선이름(line_key),
             "lat": lat,
-            "lon": lon
+            "lng": lng
         }
+
+        if code:
+            역코드표[
+                (line, code)
+            ] = node
 
         key = 역이름키(name)
 
-        station_index.setdefault(
-            key,
+        노선별역표.setdefault(
+            (line, key),
             []
-        ).append(node_id)
+        ).append(node)
 
-    # CSV에 저장된 이동 방향을 그대로 사용
-    graph = {
-        node_id: []
-        for node_id in nodes
+    # ----------------------------------------------
+    # 그래프
+    # ----------------------------------------------
+
+    그래프 = {
+        node: set()
+        for node in 역정보
     }
 
-    for row in edge_df.to_dict("records"):
+    def 연결(a, b, 이동수=1, 환승수=0):
 
-        a = str(row["from_node_id"]).strip()
-        b = str(row["to_node_id"]).strip()
+        if a == b:
+            return
 
-        if a not in nodes or b not in nodes:
-            continue
+        if a not in 그래프:
+            return
 
-        try:
-            seconds = float(row["seconds"])
+        if b not in 그래프:
+            return
 
-        except (TypeError, ValueError):
-            continue
-
-        edge_type = str(
-            row["edge_type"]
-        ).strip().upper()
-
-        graph[a].append(
-            (b, seconds, edge_type)
+        그래프[a].add(
+            (b, 이동수, 환승수)
         )
 
-    return nodes, graph, station_index
-
-
-# =========================================================
-# 역명 정확히 확인
-# 같은 이름의 역이 멀리 떨어져 있으면 임의 선택하지 않음
-# =========================================================
-def 정확한역찾기(query, nodes, station_index):
-
-    key = 역이름키(query)
-
-    if not key:
-        return None, "역 이름을 입력해 줘."
-
-    # 완전 일치만 확인
-    # 일부 글자 검색이나 비슷한 역 추천은 없음
-    matches = station_index.get(key, [])
-
-    if not matches:
-        return None, (
-            f"'{query}' 역을 찾을 수 없어. "
-            "역 이름을 정확히 입력해 줘."
+        그래프[b].add(
+            (a, 이동수, 환승수)
         )
 
-    # 동일 역의 여러 노선 노드는 가까운 좌표에 모여 있음
-    # 같은 이름이지만 멀리 떨어진 별개 역이면 자동 선택하지 않음
-    groups = []
+    # ----------------------------------------------
+    # 인접 역 연결
+    # ----------------------------------------------
 
-    for node_id in matches:
+    for row in 구간자료.to_dict("records"):
 
-        placed = False
+        line = row.get(
+            "line",
+            ""
+        ).strip()
 
-        for group in groups:
+        code_a = row.get(
+            "up_station_code",
+            ""
+        ).strip()
 
-            if 두지점거리_km(
-                nodes[node_id],
-                nodes[group[0]]
-            ) <= 1.0:
+        code_b = row.get(
+            "down_station_code",
+            ""
+        ).strip()
 
-                group.append(node_id)
-                placed = True
-                break
+        name_a = row.get(
+            "up_station_name",
+            ""
+        ).strip()
 
-        if not placed:
-            groups.append([node_id])
+        name_b = row.get(
+            "down_station_name",
+            ""
+        ).strip()
 
-    if len(groups) > 1:
-
-        return None, (
-            f"'{query}'이라는 이름의 역이 서로 다른 위치에 있어. "
-            "잘못된 역을 선택하지 않도록 경로 검색을 중단했어."
+        a = 역코드표.get(
+            (line, code_a)
         )
 
-    return groups[0], None
+        b = 역코드표.get(
+            (line, code_b)
+        )
+
+        if not a:
+
+            후보 = 노선별역표.get(
+                (line, 역이름키(name_a)),
+                []
+            )
+
+            if 후보:
+                a = 후보[0]
+
+        if not b:
+
+            후보 = 노선별역표.get(
+                (line, 역이름키(name_b)),
+                []
+            )
+
+            if 후보:
+                b = 후보[0]
+
+        if a and b:
+            연결(a, b, 1, 0)
+
+    # ----------------------------------------------
+    # 환승역 연결
+    # ----------------------------------------------
+
+    이름별노드 = {}
+
+    for node, info in 역정보.items():
+
+        key = 역이름키(
+            info["name"]
+        )
+
+        이름별노드.setdefault(
+            key,
+            []
+        ).append(node)
+
+    for nodes in 이름별노드.values():
+
+        for a, b in combinations(
+            nodes,
+            2
+        ):
+
+            if (
+                역정보[a]["line"]
+                == 역정보[b]["line"]
+            ):
+                continue
+
+            if 두역거리(
+                역정보[a],
+                역정보[b]
+            ) <= 500:
+
+                연결(
+                    a,
+                    b,
+                    0,
+                    1
+                )
+
+    역검색표 = {
+        key: sorted(set(nodes))
+        for key, nodes
+        in 이름별노드.items()
+    }
+
+    return (
+        역정보,
+        그래프,
+        역검색표
+    )
 
 
-# =========================================================
-# 다익스트라 경로 찾기
-# =========================================================
-def 경로찾기(start_nodes, goal_nodes, graph, 기준):
+# ==================================================
+# 경로 찾기
+# ==================================================
 
-    def 우선순위(환승수, 이동수, 초):
+def 경로찾기(
+    출발노드들,
+    도착노드들,
+    그래프,
+    기준
+):
 
-        if 기준 == "최소 환승":
-            return (환승수, 이동수, 초)
+    거리표 = {}
+    이전역표 = {}
+    대기열 = []
 
-        if 기준 == "최단 역 수":
-            return (이동수, 환승수, 초)
+    for node in 출발노드들:
 
-        return (초, 환승수, 이동수)
-
-    best = {}
-    metrics = {}
-    previous = {}
-    previous_edge = {}
-
-    heap = []
-
-    for start in start_nodes:
-
-        metrics[start] = (0, 0, 0.0)
-
-        best[start] = 우선순위(
+        거리표[node] = (
             0,
-            0,
-            0.0
+            0
         )
 
         heapq.heappush(
-            heap,
-            (best[start], start)
+            대기열,
+            (0, 0, node)
         )
 
-    destination = None
+    목적지노드 = None
 
-    while heap:
+    while 대기열:
 
-        current_priority, current = heapq.heappop(heap)
+        비용1, 비용2, 현재 = (
+            heapq.heappop(대기열)
+        )
 
-        if current_priority != best.get(current):
+        if 거리표.get(
+            현재
+        ) != (
+            비용1,
+            비용2
+        ):
             continue
 
-        if current in goal_nodes:
-            destination = current
+        if 현재 in 도착노드들:
+
+            목적지노드 = 현재
             break
 
-        old_transfer, old_ride, old_seconds = metrics[current]
-
-        for nxt, seconds, edge_type in graph.get(current, []):
-
-            is_transfer = edge_type == "TRANSFER"
-
-            new_transfer = (
-                old_transfer + (1 if is_transfer else 0)
-            )
-
-            new_ride = (
-                old_ride + (0 if is_transfer else 1)
-            )
-
-            new_seconds = old_seconds + seconds
-
-            new_metrics = (
-                new_transfer,
-                new_ride,
-                new_seconds
-            )
-
-            new_priority = 우선순위(
-                *new_metrics
-            )
-
-            if new_priority < best.get(
-                nxt,
-                (float("inf"),) * 3
-            ):
-
-                best[nxt] = new_priority
-                metrics[nxt] = new_metrics
-
-                previous[nxt] = current
-                previous_edge[nxt] = edge_type
-
-                heapq.heappush(
-                    heap,
-                    (new_priority, nxt)
-                )
-
-    if destination is None:
-        return None
-
-    path = [destination]
-    edge_types = []
-
-    current = destination
-
-    while current in previous:
-
-        edge_types.append(
-            previous_edge[current]
-        )
-
-        current = previous[current]
-        path.append(current)
-
-    path.reverse()
-    edge_types.reverse()
-
-    total_seconds = metrics[destination][2]
-
-    return {
-        "path": path,
-        "edge_types": edge_types,
-        "total_seconds": total_seconds,
-        "transfer_count": metrics[destination][0],
-        "ride_count": metrics[destination][1]
-    }
-
-
-# =========================================================
-# 노선별 구간 나누기
-# =========================================================
-def 구간나누기(path, nodes):
-
-    segments = []
-
-    for node_id in path:
-
-        info = nodes[node_id]
-        line_key = info["line_key"]
-
-        if (
-            not segments
-            or segments[-1]["line_key"] != line_key
+        for 다음, 이동, 환승 in sorted(
+            그래프[현재]
         ):
 
-            segments.append({
-                "line_key": line_key,
-                "line": 노선이름(line_key),
-                "color": 노선색(line_key),
-                "nodes": [node_id]
+            if 기준 == "최소 환승":
+
+                새비용 = (
+                    비용1 + 환승,
+                    비용2 + 이동
+                )
+
+            else:
+
+                새비용 = (
+                    비용1 + 이동,
+                    비용2 + 환승
+                )
+
+            기존비용 = 거리표.get(
+                다음,
+                (
+                    float("inf"),
+                    float("inf")
+                )
+            )
+
+            if 새비용 < 기존비용:
+
+                거리표[다음] = 새비용
+
+                이전역표[다음] = 현재
+
+                heapq.heappush(
+                    대기열,
+                    (
+                        새비용[0],
+                        새비용[1],
+                        다음
+                    )
+                )
+
+    if 목적지노드 is None:
+        return None
+
+    경로 = []
+
+    현재 = 목적지노드
+
+    while True:
+
+        경로.append(현재)
+
+        if 현재 not in 이전역표:
+            break
+
+        현재 = 이전역표[현재]
+
+    경로.reverse()
+
+    return 경로
+
+
+# ==================================================
+# 노선별 구간 분리
+# ==================================================
+
+def 구간나누기(
+    경로,
+    역정보
+):
+
+    구간들 = []
+
+    for node in 경로:
+
+        노선 = 역정보[node]["line"]
+
+        if (
+            not 구간들
+            or 구간들[-1]["line"] != 노선
+        ):
+
+            구간들.append({
+                "line": 노선,
+                "nodes": [node]
             })
 
         else:
 
-            segments[-1]["nodes"].append(
-                node_id
+            구간들[-1]["nodes"].append(
+                node
             )
 
-    return segments
+    return 구간들
 
 
-# =========================================================
-# 음성 안내 문장 만들기
-# =========================================================
-def 음성문장만들기(segments, nodes):
+# ==================================================
+# 상단 화면
+# ==================================================
 
-    phrases = []
+st.markdown("""
+<div class="hero">
 
-    # 실제 이동이 없는 한 역짜리 구간은 읽지 않음
-    ride_segments = [
-        segment
-        for segment in segments
-        if len(segment["nodes"]) > 1
-    ]
-
-    if not ride_segments:
-        return "경로를 안내할 수 없습니다."
-
-    for index, segment in enumerate(ride_segments):
-
-        station_ids = segment["nodes"]
-
-        start_name = 역이름표시(
-            station_ids[0],
-            nodes
-        )
-
-        end_name = 역이름표시(
-            station_ids[-1],
-            nodes
-        )
-
-        line = segment["line"]
-
-        if index == 0:
-
-            phrases.append(
-                f"{start_name}에서 {line}을 타고 "
-                f"{end_name}까지 이동합니다."
-            )
-
-        else:
-
-            phrases.append(
-                f"{start_name}에서 {line}으로 환승한 뒤 "
-                f"{end_name}까지 이동합니다."
-            )
-
-    phrases.append(
-        f"{역이름표시(ride_segments[-1]['nodes'][-1], nodes)}에 도착했습니다."
-    )
-
-    return " ".join(phrases)
-
-
-# =========================================================
-# 지도 HTML
-# =========================================================
-def 지도HTML(path, nodes):
-
-    points = []
-
-    for node_id in path:
-
-        info = nodes[node_id]
-
-        if (
-            info["lat"] is not None
-            and info["lon"] is not None
-        ):
-
-            points.append([
-                info["lat"],
-                info["lon"]
-            ])
-
-    if not points:
-        return None
-
-    points_json = json.dumps(
-        points,
-        ensure_ascii=False
-    )
-
-    start_name_json = json.dumps(
-        역이름표시(path[0], nodes),
-        ensure_ascii=False
-    )
-
-    end_name_json = json.dumps(
-        역이름표시(path[-1], nodes),
-        ensure_ascii=False
-    )
-
-    return f"""
-    <!DOCTYPE html>
-    <html lang="ko">
-    <head>
-      <meta charset="utf-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-      <link
-        rel="stylesheet"
-        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-      >
-
-      <style>
-        html, body {{
-            margin:0;
-            padding:0;
-        }}
-
-        #map {{
-            width:100%;
-            height:420px;
-            border-radius:16px;
-        }}
-      </style>
-    </head>
-
-    <body>
-
-      <div id="map"></div>
-
-      <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-      <script>
-
-        const points = {points_json};
-
-        const startName = {start_name_json};
-        const endName = {end_name_json};
-
-        const map = L.map('map');
-
-        L.tileLayer(
-            'https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
-            {{
-                maxZoom: 19,
-                attribution: '&copy; OpenStreetMap'
-            }}
-        ).addTo(map);
-
-        const routeLine = L.polyline(
-            points,
-            {{
-                color: '#2563EB',
-                weight: 6,
-                opacity: 0.88
-            }}
-        ).addTo(map);
-
-        L.circleMarker(
-            points[0],
-            {{
-                radius: 9,
-                color: '#FFFFFF',
-                weight: 3,
-                fillColor: '#16A34A',
-                fillOpacity: 1
-            }}
-        )
-        .addTo(map)
-        .bindPopup('출발: ' + startName);
-
-        L.circleMarker(
-            points[points.length - 1],
-            {{
-                radius: 9,
-                color: '#FFFFFF',
-                weight: 3,
-                fillColor: '#DC2626',
-                fillOpacity: 1
-            }}
-        )
-        .addTo(map)
-        .bindPopup('도착: ' + endName);
-
-        if (points.length > 1) {{
-
-            map.fitBounds(
-                routeLine.getBounds(),
-                {{
-                    padding: [25, 25]
-                }}
-            );
-
-        }} else {{
-
-            map.setView(points[0], 15);
-
-        }}
-
-      </script>
-
-    </body>
-    </html>
-    """
-
-
-# =========================================================
-# 음성 안내 버튼
-# =========================================================
-def 음성버튼HTML(text):
-
-    text_json = json.dumps(
-        text,
-        ensure_ascii=False
-    )
-
-    return f"""
-    <div style="display:flex; gap:10px;">
-
-      <button
-        onclick="speakRoute()"
-        style="
-            flex:1;
-            height:52px;
-            border:0;
-            border-radius:12px;
-            background:linear-gradient(90deg,#1D4ED8,#0284C7);
-            color:white;
-            font-size:16px;
-            font-weight:800;
-            cursor:pointer;
-        "
-      >
-        🔊 경로 읽어주기
-      </button>
-
-      <button
-        onclick="stopRoute()"
-        style="
-            width:110px;
-            height:52px;
-            border:1px solid #BFDBFE;
-            border-radius:12px;
-            background:#EFF6FF;
-            color:#1E3A8A;
-            font-size:14px;
-            font-weight:700;
-            cursor:pointer;
-        "
-      >
-        ■ 중지
-      </button>
-
-    </div>
-
-    <script>
-
-      const routeText = {text_json};
-
-      function getSpeechObjects() {{
-
-        let synth = window.speechSynthesis;
-        let Utterance = window.SpeechSynthesisUtterance;
-
-        try {{
-
-          if (
-            window.parent
-            && window.parent.speechSynthesis
-          ) {{
-
-            synth = window.parent.speechSynthesis;
-
-            Utterance =
-                window.parent.SpeechSynthesisUtterance
-                || Utterance;
-
-          }}
-
-        }} catch (error) {{}}
-
-        return {{
-            synth,
-            Utterance
-        }};
-
-      }}
-
-      function speakRoute() {{
-
-        const objects = getSpeechObjects();
-
-        if (!objects.synth || !objects.Utterance) {{
-
-            alert(
-                '이 브라우저에서는 음성 안내를 지원하지 않습니다.'
-            );
-
-            return;
-        }}
-
-        objects.synth.cancel();
-
-        const utterance =
-            new objects.Utterance(routeText);
-
-        utterance.lang = 'ko-KR';
-        utterance.rate = 0.88;
-        utterance.pitch = 1.0;
-        utterance.volume = 1.0;
-
-        objects.synth.speak(utterance);
-
-      }}
-
-      function stopRoute() {{
-
-        const objects = getSpeechObjects();
-
-        if (objects.synth) {{
-            objects.synth.cancel();
-        }}
-
-      }}
-
-    </script>
-    """
-
-
-# =========================================================
-# 앱 화면
-# =========================================================
-st.markdown(
-    """
-    <div class="hero">
-
-      <div class="hero-title">
+    <div class="hero-title">
         🚇 BLUE ROUTE
-      </div>
-
-      <div class="hero-subtitle">
-        출발역과 도착역을 입력하면 지하철 이동 경로를 안내합니다.<br>
-        비슷한 역 검색이나 자동 추천 없이 입력한 역 이름만 정확히 확인합니다.
-      </div>
-
     </div>
-    """,
-    unsafe_allow_html=True,
-)
+
+    <div class="hero-subtitle">
+        파란색 테마의 지하철 길찾기
+        <br>
+        출발역과 도착역을 입력하면 이동 경로를 알려드립니다.
+    </div>
+
+</div>
+""", unsafe_allow_html=True)
 
 
-# =========================================================
+# ==================================================
 # 데이터 로딩
-# =========================================================
+# ==================================================
+
 try:
 
     with st.spinner(
         "지하철 정보를 불러오는 중..."
     ):
 
-        역정보, 그래프, 역검색표 = 데이터불러오기()
+        (
+            역정보,
+            그래프,
+            역검색표
+        ) = 데이터불러오기()
 
-except Exception as error:
+except Exception as e:
 
     st.error(
-        "지하철 데이터를 불러오지 못했어. 잠시 후 다시 실행해 줘."
-    )
-
-    st.caption(
-        f"오류 내용: {error}"
+        "지하철 데이터를 불러오지 못했어."
     )
 
     st.stop()
 
 
-# =========================================================
-# 세션 상태
-# =========================================================
-if "route_result" not in st.session_state:
-    st.session_state.route_result = None
-
-if "route_error" not in st.session_state:
-    st.session_state.route_error = None
-
-
-# =========================================================
+# ==================================================
 # 검색창
-# =========================================================
-with st.form("route_form"):
+# ==================================================
+
+with st.form(
+    "route_form"
+):
 
     st.subheader(
         "어디로 이동할까요?"
@@ -940,8 +687,7 @@ with st.form("route_form"):
         "경로 기준",
         [
             "최소 환승",
-            "최단 역 수",
-            "최단 시간"
+            "최단 역 수"
         ],
         horizontal=True
     )
@@ -952,303 +698,395 @@ with st.form("route_form"):
     )
 
 
-# =========================================================
-# 경로 검색
-# =========================================================
+# ==================================================
+# 경로 결과
+# ==================================================
+
 if 검색버튼:
 
-    st.session_state.route_result = None
-    st.session_state.route_error = None
+    출발키 = 역이름키(
+        출발입력
+    )
+
+    도착키 = 역이름키(
+        도착입력
+    )
 
     if (
         not 출발입력.strip()
         or not 도착입력.strip()
     ):
 
-        st.session_state.route_error = (
+        st.warning(
             "출발역과 도착역을 모두 입력해 줘."
         )
 
-    elif (
-        역이름키(출발입력)
-        == 역이름키(도착입력)
-    ):
+    elif 출발키 == 도착키:
 
-        st.session_state.route_error = (
+        st.info(
             "출발역과 도착역이 같아."
         )
 
+    elif 출발키 not in 역검색표:
+
+        st.error(
+            f"'{출발입력}' 역을 찾을 수 없어."
+        )
+
+    elif 도착키 not in 역검색표:
+
+        st.error(
+            f"'{도착입력}' 역을 찾을 수 없어."
+        )
+
     else:
 
-        출발노드들, 출발오류 = 정확한역찾기(
-            출발입력,
-            역정보,
-            역검색표
+        경로 = 경로찾기(
+            역검색표[출발키],
+            set(역검색표[도착키]),
+            그래프,
+            기준
         )
 
-        도착노드들, 도착오류 = 정확한역찾기(
-            도착입력,
-            역정보,
-            역검색표
-        )
+        if not 경로:
 
-        if 출발오류:
-
-            st.session_state.route_error = 출발오류
-
-        elif 도착오류:
-
-            st.session_state.route_error = 도착오류
-
-        else:
-
-            결과 = 경로찾기(
-                출발노드들,
-                set(도착노드들),
-                그래프,
-                기준
+            st.error(
+                "연결된 경로를 찾지 못했어."
             )
 
-            if 결과 is None:
-
-                st.session_state.route_error = (
-                    "두 역 사이의 경로를 찾지 못했어."
-                )
-
-            else:
-
-                결과["segments"] = 구간나누기(
-                    결과["path"],
-                    역정보
-                )
-
-                결과["origin_name"] = 역이름표시(
-                    결과["path"][0],
-                    역정보
-                )
-
-                결과["destination_name"] = 역이름표시(
-                    결과["path"][-1],
-                    역정보
-                )
-
-                결과["voice_text"] = 음성문장만들기(
-                    결과["segments"],
-                    역정보
-                )
-
-                st.session_state.route_result = 결과
-
-
-# =========================================================
-# 오류 표시
-# =========================================================
-if st.session_state.route_error:
-
-    st.error(
-        st.session_state.route_error
-    )
-
-
-# =========================================================
-# 경로 결과 표시
-# =========================================================
-if st.session_state.route_result:
-
-    result = st.session_state.route_result
-
-    path = result["path"]
-    segments = result["segments"]
-
-    st.markdown(
-        f"""
-        <div class='route-heading'>
-            {result['origin_name']}
-            →
-            {result['destination_name']}
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    total_minutes = max(
-        1,
-        round(result["total_seconds"] / 60)
-    )
-
-    if total_minutes < 60:
-
-        time_text = f"약 {total_minutes}분"
-
-    else:
-
-        hours = total_minutes // 60
-        mins = total_minutes % 60
-
-        if mins:
-            time_text = f"약 {hours}시간 {mins}분"
         else:
-            time_text = f"약 {hours}시간"
 
-    m1, m2, m3 = st.columns(3)
+            구간들 = 구간나누기(
+                경로,
+                역정보
+            )
 
-    m1.metric(
-        "예상 이동 시간",
-        time_text
-    )
+            총이동역수 = sum(
+                len(구간["nodes"]) - 1
+                for 구간 in 구간들
+            )
 
-    m2.metric(
-        "이동 구간",
-        f"{result['ride_count']}개"
-    )
+            총환승횟수 = sum(
+                역정보[a]["line"]
+                != 역정보[b]["line"]
+                for a, b
+                in zip(
+                    경로,
+                    경로[1:]
+                )
+            )
 
-    m3.metric(
-        "환승 횟수",
-        f"{result['transfer_count']}회"
-    )
+            # ======================================
+            # 경로 제목
+            # ======================================
 
-    # ---------------------------------------------
-    # 노선별 이동 경로
-    # ---------------------------------------------
-    st.divider()
+            출발역이름 = 역이름표시(
+                경로[0],
+                역정보
+            )
 
-    st.subheader(
-        "🧭 이동 경로"
-    )
-
-    for index, segment in enumerate(segments):
-
-        station_names = [
-            역이름표시(node_id, 역정보)
-            for node_id in segment["nodes"]
-        ]
-
-        st.markdown(
-            f"""
-            <div style="
-                border:1px solid #BFDBFE;
-                background:white;
-                border-radius:15px;
-                padding:17px;
-                margin:10px 0;
-            ">
-
-                <div style="
-                    font-size:18px;
-                    font-weight:800;
-                    color:{segment['color']};
-                ">
-                    {segment['line']}
-                </div>
-
-                <div style="
-                    margin-top:10px;
-                    font-weight:700;
-                    color:#1E3A8A;
-                ">
-                    {station_names[0]}
-                    →
-                    {station_names[-1]}
-                </div>
-
-                <div style="
-                    margin-top:10px;
-                    line-height:2;
-                    color:#334155;
-                ">
-                    {' → '.join(station_names)}
-                </div>
-
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-        if index < len(segments) - 1:
-
-            transfer_station = station_names[-1]
-            next_line = segments[index + 1]["line"]
+            도착역이름 = 역이름표시(
+                경로[-1],
+                역정보
+            )
 
             st.markdown(
                 f"""
-                <div class='transfer-note'>
-                    🔄 <b>{transfer_station}</b>에서
-                    <b>{next_line}</b>으로 환승하세요.
+                <div class="route-box">
+
+                    <div class="route-title">
+                        {출발역이름}
+                        →
+                        {도착역이름}
+                    </div>
+
                 </div>
                 """,
                 unsafe_allow_html=True
             )
 
-    # ---------------------------------------------
-    # 전체 이동 순서
-    # ---------------------------------------------
-    st.divider()
+            c1, c2, c3 = st.columns(3)
 
-    st.subheader(
-        "📍 전체 이동 순서"
-    )
+            c1.metric(
+                "이동 역 수",
+                f"{총이동역수}개"
+            )
 
-    for number, node_id in enumerate(
-        path,
-        start=1
-    ):
+            c2.metric(
+                "환승 횟수",
+                f"{총환승횟수}회"
+            )
 
-        st.write(
-            f"**{number}. {역이름표시(node_id, 역정보)}** "
-            f"· {역정보[node_id]['line']}"
-        )
+            c3.metric(
+                "이용 노선",
+                f"{len(구간들)}개"
+            )
 
-    # ---------------------------------------------
-    # 이동 지도
-    # ---------------------------------------------
-    st.divider()
+            st.divider()
 
-    st.subheader(
-        "🗺️ 이동 경로 지도"
-    )
+            # ======================================
+            # 음성 내용 만들기
+            # ======================================
 
-    map_html = 지도HTML(
-        path,
-        역정보
-    )
+            음성문장 = []
 
-    if map_html:
+            음성문장.append(
+                f"{출발역이름}에서 출발합니다."
+            )
 
-        components.html(
-            map_html,
-            height=435,
-            scrolling=False
-        )
+            # ======================================
+            # 이동 경로
+            # ======================================
 
-    else:
+            st.subheader(
+                "🧭 이동 경로"
+            )
 
-        st.info(
-            "이 경로는 지도 좌표를 표시할 수 없어."
-        )
+            for i, 구간 in enumerate(
+                구간들
+            ):
 
-    # ---------------------------------------------
-    # 음성 안내
-    # ---------------------------------------------
-    st.divider()
+                노선 = 구간["line"]
+                역목록 = 구간["nodes"]
 
-    st.subheader(
-        "🔊 음성 안내"
-    )
+                첫역 = 역이름표시(
+                    역목록[0],
+                    역정보
+                )
+
+                마지막역 = 역이름표시(
+                    역목록[-1],
+                    역정보
+                )
+
+                st.markdown(
+                    f"""
+                    <div class="station-box">
+
+                        <div class="line-title">
+                            🔵 {노선}
+                        </div>
+
+                        <br>
+
+                        <b>
+                            {첫역}
+                            →
+                            {마지막역}
+                        </b>
+
+                        <br><br>
+
+                        <div class="station-text">
+                            {" → ".join(
+                                역이름표시(
+                                    node,
+                                    역정보
+                                )
+                                for node in 역목록
+                            )}
+                        </div>
+
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                음성문장.append(
+                    f"{노선}을 타고 "
+                    f"{마지막역}까지 이동하세요."
+                )
+
+                # ==================================
+                # 환승
+                # ==================================
+
+                if i < len(구간들) - 1:
+
+                    다음노선 = 구간들[
+                        i + 1
+                    ]["line"]
+
+                    st.markdown(
+                        f"""
+                        <div class="transfer-box">
+
+                            🔄 <b>{마지막역}</b>
+                            에서
+
+                            <b>{다음노선}</b>
+                            으로 환승하세요.
+
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+
+                    음성문장.append(
+                        f"{마지막역}에서 "
+                        f"{다음노선}으로 "
+                        f"환승하세요."
+                    )
+
+            음성문장.append(
+                f"{도착역이름}에 도착했습니다."
+            )
+
+            # ======================================
+            # 전체 이동 순서
+            # ======================================
+
+            st.divider()
+
+            st.subheader(
+                "📍 전체 이동 순서"
+            )
+
+            전체역목록 = []
+
+            for node in 경로:
+
+                이름 = 역이름표시(
+                    node,
+                    역정보
+                )
+
+                if 전체역목록:
+
+                    if (
+                        역이름키(
+                            전체역목록[-1]
+                        )
+                        ==
+                        역이름키(이름)
+                    ):
+                        continue
+
+                전체역목록.append(
+                    이름
+                )
+
+            # HTML을 사용하지 않고
+            # Streamlit 기본 출력으로 표시
+            for 번호, 이름 in enumerate(
+                전체역목록,
+                start=1
+            ):
+
+                st.markdown(
+                    f"**{번호}. {이름}**"
+                )
+
+            # ======================================
+            # 음성 안내
+            # ======================================
+
+            st.divider()
+
+            st.subheader(
+                "🔊 음성 안내"
+            )
+
+            음성내용 = " ".join(
+                음성문장
+            )
+
+            st.info(
+                음성내용
+            )
+
+            음성JS = json.dumps(
+                음성내용,
+                ensure_ascii=False
+            )
+
+            components.html(
+                f"""
+                <script>
+
+                function speakRoute() {{
+
+                    if (
+                        !window.parent
+                        || !window.parent.speechSynthesis
+                    ) {{
+                        alert(
+                            "이 브라우저에서는 음성 안내를 사용할 수 없습니다."
+                        );
+                        return;
+                    }}
+
+                    window.parent.speechSynthesis.cancel();
+
+                    const text =
+                        {음성JS};
+
+                    const speech =
+                        new window.parent.SpeechSynthesisUtterance(
+                            text
+                        );
+
+                    speech.lang = "ko-KR";
+                    speech.rate = 0.85;
+                    speech.pitch = 1;
+                    speech.volume = 1;
+
+                    window.parent.speechSynthesis.speak(
+                        speech
+                    );
+                }}
+
+                </script>
+
+                <button
+                    onclick="speakRoute()"
+                    style="
+                        width:100%;
+                        height:55px;
+                        border:none;
+                        border-radius:12px;
+                        background:
+                            linear-gradient(
+                                90deg,
+                                #1D4ED8,
+                                #0284C7
+                            );
+                        color:white;
+                        font-size:16px;
+                        font-weight:bold;
+                        cursor:pointer;
+                    "
+                >
+                    🔊 이 경로 읽어주기
+                </button>
+                """,
+                height=70
+            )
+
+            # ======================================
+            # 안내
+            # ======================================
+
+            with st.expander(
+                "ℹ️ 경로 안내 참고"
+            ):
+
+                st.write(
+                    "역 코드는 내부에서 경로 계산에만 사용합니다."
+                )
+
+                st.write(
+                    "화면에는 역 이름을 한글로 표시합니다."
+                )
+
+                st.write(
+                    "음성 안내도 역 코드가 아닌 "
+                    "한글 역 이름을 읽습니다."
+                )
+
+else:
 
     st.info(
-        result["voice_text"]
+        "출발역과 도착역을 입력한 다음 "
+        "**경로 찾기**를 눌러 줘."
     )
-
-    components.html(
-        음성버튼HTML(result["voice_text"]),
-        height=68,
-        scrolling=False
-    )
-
-
-# =========================================================
-# 하단 안내
-# =========================================================
-st.caption(
-    "※ 수도권 지하철 데이터 기준이며, 실제 열차 운행 상황·급행·막차 정보는 반영되지 않을 수 있어."
-)
