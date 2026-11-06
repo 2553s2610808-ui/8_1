@@ -1,181 +1,96 @@
-        "환승 횟수",
-        f"{result['transfer_count']}회"
-    )
+import heapq
+import html as html_lib
+import json
+import math
+import re
+from io import StringIO
 
-    # -----------------------------------------------------
-    # 이동 경로
-    # -----------------------------------------------------
-    st.divider()
-
-    st.subheader(
-        "🧭 이동 경로"
-    )
-
-    displayed_step = False
-
-    for step in steps:
-
-        if step["type"] == "ride":
-
-            station_names = [
-                역이름표시(node_id, 역정보)
-                for node_id in step["nodes"]
-            ]
-
-            if len(station_names) < 2:
-                continue
-
-            displayed_step = True
-
-            with st.container(border=True):
-
-                # HTML 코드가 아닌 일반 텍스트로 노선 표시
-                st.markdown(
-                    f"**{step['line']}**"
-                )
-
-                st.write(
-                    f"{station_names[0]} → {station_names[-1]}"
-                )
-
-                # HTML 태그가 해석되지 않는 일반 텍스트 출력
-                st.text(
-                    "정차역: "
-                    + " → ".join(station_names)
-                )
-
-        elif step["type"] == "transfer":
-
-            displayed_step = True
-
-            st.info(
-                f"🔄 {step['station']}에서 "
-                f"{step['from_line']}에서 "
-                f"{step['to_line']}으로 환승하세요."
-            )
-
-        elif step["type"] == "direct":
-
-            displayed_step = True
-
-            st.info(
-                f"🚇 {step['from_station']}에서 "
-                f"{step['to_station']}까지 "
-                f"{step['from_line']}에서 "
-                f"{step['to_line']}으로 직결 운행합니다."
-            )
-
-    if not displayed_step:
-
-        st.warning(
-            "계산된 경로의 이동 구간을 표시하지 못했어. "
-            "다른 경로 기준으로 다시 검색해 줘."
-        )
-
-    # -----------------------------------------------------
-    # 전체 이동 순서
-    # -----------------------------------------------------
-    st.divider()
-
-    st.subheader(
-        "📍 전체 이동 순서"
-    )
-
-    route_stations = []
-
-    for node_id in path:
-
-        station_name = 역이름표시(
-            node_id,
-            역정보
-        )
-
-        line_name = 역정보[node_id]["line"]
-
-        # 환승으로 같은 역이 연속될 때 중복 표시하지 않음
-        if (
-            route_stations
-            and route_stations[-1][0] == station_name
-        ):
-
-            route_stations[-1] = (
-                station_name,
-                line_name
-            )
-
-        else:
-
-            route_stations.append(
-                (
-                    station_name,
-                    line_name
-                )
-            )
-
-    for number, (station_name, line_name) in enumerate(
-        route_stations,
-        start=1
-    ):
-
-        st.text(
-            f"{number}. {station_name} · {line_name}"
-        )
-
-    # -----------------------------------------------------
-    # 지도
-    # -----------------------------------------------------
-    st.divider()
-
-    st.subheader(
-        "🗺️ 이동 경로 지도"
-    )
-
-    st.caption(
-        "지도는 역 좌표를 직선으로 연결한 참고용 표시입니다."
-    )
-
-    map_html = 지도HTML(
-        path,
-        역정보
-    )
-
-    if map_html:
-
-        components.html(
-            map_html,
-            height=435,
-            scrolling=False
-        )
-
-    else:
-
-        st.info(
-            "이 경로는 지도 좌표를 표시할 수 없어."
-        )
-
-    # -----------------------------------------------------
-    # 음성 안내
-    # -----------------------------------------------------
-    st.divider()
-
-    st.subheader(
-        "🔊 음성 안내"
-    )
-
-    st.info(
-        result["voice_text"]
-    )
-
-    components.html(
-        음성버튼HTML(result["voice_text"]),
-        height=68,
-        scrolling=False,
-    )
+import pandas as pd
+import requests
+import streamlit as st
+import streamlit.components.v1 as components
 
 
 # =========================================================
-# 하단 안내
+# 기본 설정
 # =========================================================
-st.caption(
-    "※ 수도권 지하철 데이터 기준이며, 실제 열차 운행 상황·급행·막차 정보는 반영되지 않을 수 있어."
+st.set_page_config(
+    page_title="BLUE ROUTE | 지하철 길찾기",
+    page_icon="🚇",
+    layout="wide",
+    initial_sidebar_state="collapsed",
 )
+
+STATION_URL = (
+    "https://raw.githubusercontent.com/"
+    "minseok852/subway-etl/main/output/station_nodes.csv"
+)
+EDGE_URL = (
+    "https://raw.githubusercontent.com/"
+    "minseok852/subway-etl/main/output/station_edges.csv"
+)
+
+HEADERS = {"User-Agent": "BlueRoute-Streamlit/1.0"}
+
+LINE_NAMES = {
+    "1": "1호선", "2": "2호선", "3": "3호선", "4": "4호선",
+    "5": "5호선", "6": "6호선", "7": "7호선", "8": "8호선",
+    "9": "9호선", "B": "수인분당선", "S": "신분당선",
+    "K": "경의·중앙선", "A": "공항철도", "G": "경춘선",
+    "U": "의정부경전철", "E": "용인에버라인", "KK": "경강선",
+    "W": "우이신설선", "SH": "서해선", "KP": "김포골드라인",
+    "I": "인천1호선", "I2": "인천2호선", "GTXA": "GTX-A",
+    "N": "신림선", "M": "인천공항 자기부상철도",
+}
+
+LINE_COLORS = {
+    "1": "#0052A4", "2": "#00A84D", "3": "#EF7C1C",
+    "4": "#00A5DE", "5": "#996CAC", "6": "#CD7C2F",
+    "7": "#747F00", "8": "#E6186C", "9": "#BDB092",
+    "B": "#F5A200", "S": "#D31145", "K": "#77C4A3",
+    "A": "#0090D2", "G": "#178C72", "U": "#B7C450",
+    "E": "#FFCD00", "KK": "#003DA5", "W": "#B7B7B7",
+    "SH": "#F06A00", "KP": "#8B50A4", "I": "#759C2A",
+    "I2": "#F5A100", "GTXA": "#3B82F6", "N": "#B0CE18",
+    "M": "#777777", "인천국제공항선": "#0090D2",
+    "수인분당선": "#F5A200", "신분당선": "#D31145",
+    "경의·중앙선": "#77C4A3", "경춘선": "#178C72",
+    "용인에버라인": "#FFCD00", "경강선": "#003DA5",
+    "우이신설선": "#B7B7B7", "서해선": "#F06A00",
+    "김포골드라인": "#8B50A4", "인천지하철 1호선": "#759C2A",
+    "인천지하철 2호선": "#F5A100", "자기부상철도": "#777777",
+    "GTX-A": "#3B82F6", "신림선": "#B0CE18",
+}
+
+
+def 노선이름(line_key):
+    key = str(line_key).strip()
+    return LINE_NAMES.get(key, key)
+
+
+def 노선색(line_key):
+    return LINE_COLORS.get(
+        str(line_key).strip(),
+        "#2563EB"
+    )
+
+
+# =========================================================
+# 화면 디자인
+# =========================================================
+st.markdown(
+    """
+    <style>
+    .stApp {
+        background: linear-gradient(
+            180deg,
+            #F2F7FF 0%,
+            #F8FBFF 100%
+        );
+        color: #172554;
+    }
+
+    .block-container {
+        max-width: 1050px;
+        padding-top: 28px;
+        padding-bottom: 48px;
